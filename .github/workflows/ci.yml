@@ -66,13 +66,19 @@ jobs:
           node-version: '22'
       - name: Build native target
         run: cargo build --release --target ${{ matrix.target }}
+      - name: Read wrapper version
+        id: version
+        shell: bash
+        run: |
+          version=$(node -p "require('./npm/wrapper/package.json').version")
+          echo "version=$version" >> "$GITHUB_OUTPUT"
       - name: Prepare platform package (Unix)
         if: runner.os != 'Windows'
-        run: node scripts/prepare-npm.mjs ${{ matrix.target }} target/${{ matrix.target }}/release/refranero 0.1.0
+        run: node scripts/prepare-npm.mjs ${{ matrix.target }} target/${{ matrix.target }}/release/refranero ${{ steps.version.outputs.version }}
       - name: Prepare platform package (Windows)
         if: runner.os == 'Windows'
         shell: pwsh
-        run: node scripts/prepare-npm.mjs ${{ matrix.target }} target/${{ matrix.target }}/release/refranero.exe 0.1.0
+        run: node scripts/prepare-npm.mjs ${{ matrix.target }} target/${{ matrix.target }}/release/refranero.exe ${{ steps.version.outputs.version }}
       - name: Verify platform package
         shell: bash
         run: cd npm/dist/${{ matrix.package }} && npm pack --dry-run
