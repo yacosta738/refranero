@@ -1,0 +1,54 @@
+{
+  "$schema": "https://docs.renovatebot.com/renovate-schema.json",
+  "extends": [
+    "config:recommended",
+    "helpers:pinGitHubActionDigests"
+  ],
+  "dependencyDashboard": true,
+  "labels": ["dependencies"],
+  "prHourlyLimit": 2,
+  "prConcurrentLimit": 5,
+  "branchConcurrentLimit": 8,
+  "vulnerabilityAlerts": {
+    "enabled": true,
+    "labels": ["dependencies", "security"]
+  },
+  "ignoreDeps": [
+    "@yacosta738/refranero-darwin-arm64",
+    "@yacosta738/refranero-darwin-x64",
+    "@yacosta738/refranero-linux-arm64",
+    "@yacosta738/refranero-linux-x64",
+    "@yacosta738/refranero-win32-arm64",
+    "@yacosta738/refranero-win32-x64"
+  ],
+  "packageRules": [
+    {
+      "description": "Group non-major Rust dependency updates and their lockfile changes.",
+      "matchManagers": ["cargo"],
+      "matchUpdateTypes": ["minor", "patch", "pin"],
+      "groupName": "Rust dependencies (non-major)"
+    },
+    {
+      "description": "Group non-major npm wrapper dependency updates.",
+      "matchManagers": ["npm"],
+      "matchUpdateTypes": ["minor", "patch", "pin"],
+      "groupName": "npm dependencies (non-major)"
+    },
+    {
+      "description": "Group SHA digest refreshes for GitHub Actions.",
+      "matchManagers": ["github-actions"],
+      "matchUpdateTypes": ["digest"],
+      "groupName": "GitHub Actions digests"
+    },
+    {
+      "description": "Prioritize security fixes without bypassing branch protections.",
+      "matchJsonata": ["isVulnerabilityAlert = true"],
+      "prPriority": 10
+    },
+    {
+      "description": "Keep major upgrades separate for manual review.",
+      "matchUpdateTypes": ["major"],
+      "addLabels": ["breaking-change"]
+    }
+  ]
+}
