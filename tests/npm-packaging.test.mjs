@@ -55,14 +55,16 @@ test('rejects a missing or empty native binary without producing a package', () 
 test('wrapper forwards arguments and preserves the native exit code', () => {
   withTempDir((tempDir) => {
     const wrapperDir = join(tempDir, 'wrapper');
-    const packageDir = join(wrapperDir, 'node_modules/@yacosta738/refranero-darwin-arm64');
+    const platformPackage = `@yacosta738/refranero-${process.platform}-${process.arch}`;
+    const packageDir = join(wrapperDir, 'node_modules', platformPackage);
     const binDir = join(packageDir, 'bin');
+    const binaryName = process.platform === 'win32' ? 'refranero.exe' : 'refranero';
     mkdirSync(join(wrapperDir, 'bin'), { recursive: true });
     mkdirSync(binDir, { recursive: true });
-    writeFileSync(join(packageDir, 'package.json'), JSON.stringify({ name: '@yacosta738/refranero-darwin-arm64', version: '0.1.0' }));
+    writeFileSync(join(packageDir, 'package.json'), JSON.stringify({ name: platformPackage, version: '0.1.0' }));
     writeFileSync(join(wrapperDir, 'package.json'), JSON.stringify({ type: 'module' }));
     const argsPath = join(tempDir, 'args.json');
-    const binaryPath = join(binDir, 'refranero');
+    const binaryPath = join(binDir, binaryName);
     writeFileSync(binaryPath, `#!/usr/bin/env node\nimport { writeFileSync } from 'node:fs';\nwriteFileSync(${JSON.stringify(argsPath)}, JSON.stringify(process.argv.slice(2)));\nprocess.exit(7);\n`);
     chmodSync(binaryPath, 0o755);
     const wrapperCopy = join(wrapperDir, 'bin/refranero.mjs');
