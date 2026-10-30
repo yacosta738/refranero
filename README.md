@@ -4,6 +4,10 @@ Offline-first Rust command-line reader for traditional Spanish sayings, with opt
 
 > **Status: prototype, not yet published to npm.** The runtime has local test coverage and the current-portal import has been exercised against the live site. Online import still depends on external websites' availability and HTML structures.
 
+## Releases
+
+Release Please tracks Conventional Commits on `main` and opens or updates a release pull request. After approval and merge, it creates the version tag and GitHub Release. As in AgentSync, the workflow uses a GitHub App with the repository secrets `APP_ID` and `APP_PRIVATE_KEY`, so its PR, tag, and release events can start other workflows. Install the App on this repository with **Contents** and **Pull requests** permissions set to read and write. Configure the secrets before enabling releases. The workflow does not publish npm packages or binaries.
+
 ## Quick start
 
 Rust toolchain (1.85+) is required to build from source:
