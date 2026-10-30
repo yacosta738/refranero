@@ -28,7 +28,9 @@ Delegated direct. Añadir gestión de versiones/releases con Release Please y fi
 - Revisión independiente: no se detectaron errores bloqueantes. Se eliminó el extra-file del template npm porque usa marcadores y no debe editarse como un JSON de versión normal.
 - `cargo fmt --all -- --check`, `cargo clippy --all-targets -- -D warnings`, `cargo test --all-targets` (15 PASS), `node --check` x2, `node --test` (3 PASS), `npm pack --dry-run`: PASS.
 - CI local de matriz cross-platform no se ejecutó; requiere runners GitHub.
-- Rama `ci/release-please-pinned-actions` creada; PR pendiente.
+- GitHub Actions encontró dos problemas y ambos quedaron corregidos en commits posteriores de la misma PR: faltaba `toolchain: stable` para `dtolnay/rust-toolchain`; el test npm generaba un paquete de plataforma distinto al runner Linux.
+- La suite Node pasa local tras la corrección. Runs remotos actualizados siguen pendientes al cierre de esta revisión.
+- PR #2: https://github.com/yacosta738/refranero/pull/2; último commit `183c60ac8866efb6081f9bed11ff0ad1a15c28e6`.
 
 ## Estado
 Checking.
