@@ -6,7 +6,7 @@ Offline-first Rust command-line reader for traditional Spanish sayings, with opt
 
 ## Releases
 
-Release Please tracks Conventional Commits on `main`, opens or updates a release pull request, and creates a GitHub Release and version tag when that pull request is merged. The workflow uses the repository `GITHUB_TOKEN` with scoped write permissions. It does not publish npm packages or binaries.
+Release Please tracks Conventional Commits on `main` and opens or updates a release pull request. After approval and merge, it creates the version tag and GitHub Release. As in AgentSync, the workflow uses a GitHub App with the repository secrets `APP_ID` and `APP_PRIVATE_KEY`, so its PR, tag, and release events can start other workflows. Configure those secrets before enabling releases. The workflow does not publish npm packages or binaries.
 
 ## Quick start
 
