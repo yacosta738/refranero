@@ -4,6 +4,10 @@ Offline-first Rust command-line reader for traditional Spanish sayings, with opt
 
 > **Status: prototype, not yet published to npm.** The runtime has local test coverage and the current-portal import has been exercised against the live site. Online import still depends on external websites' availability and HTML structures.
 
+## Releases
+
+Release Please tracks Conventional Commits on `main`, opens or updates a release pull request, and creates a GitHub Release and version tag when that pull request is merged. The workflow uses the repository `GITHUB_TOKEN` with scoped write permissions. It does not publish npm packages or binaries.
+
 ## Quick start
 
 Rust toolchain (1.85+) is required to build from source:

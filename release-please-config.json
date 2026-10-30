@@ -1,0 +1,61 @@
+{
+  "$schema": "https://raw.githubusercontent.com/googleapis/release-please/main/schemas/config.json",
+  "release-type": "rust",
+  "include-component-in-tag": false,
+  "versioning": "default",
+  "changelog-sections": [
+    { "type": "feat", "section": "Features" },
+    { "type": "fix", "section": "Bug Fixes" },
+    { "type": "perf", "section": "Performance" },
+    { "type": "revert", "section": "Reverts" },
+    { "type": "docs", "section": "Documentation" },
+    { "type": "style", "section": "Styles" },
+    { "type": "refactor", "section": "Code Refactoring" },
+    { "type": "build", "section": "Build System" },
+    { "type": "ci", "section": "Continuous Integration" },
+    { "type": "test", "section": "Tests" },
+    { "type": "chore", "section": "Chores" }
+  ],
+  "packages": {
+    ".": {}
+  },
+  "draft": false,
+  "prerelease": false,
+  "extra-files": [
+    {
+      "type": "json",
+      "path": "npm/wrapper/package.json",
+      "jsonpath": "$.version"
+    },
+    {
+      "type": "json",
+      "path": "npm/wrapper/package.json",
+      "jsonpath": "$.optionalDependencies['@yacosta738/refranero-darwin-arm64']"
+    },
+    {
+      "type": "json",
+      "path": "npm/wrapper/package.json",
+      "jsonpath": "$.optionalDependencies['@yacosta738/refranero-darwin-x64']"
+    },
+    {
+      "type": "json",
+      "path": "npm/wrapper/package.json",
+      "jsonpath": "$.optionalDependencies['@yacosta738/refranero-linux-arm64']"
+    },
+    {
+      "type": "json",
+      "path": "npm/wrapper/package.json",
+      "jsonpath": "$.optionalDependencies['@yacosta738/refranero-linux-x64']"
+    },
+    {
+      "type": "json",
+      "path": "npm/wrapper/package.json",
+      "jsonpath": "$.optionalDependencies['@yacosta738/refranero-win32-arm64']"
+    },
+    {
+      "type": "json",
+      "path": "npm/wrapper/package.json",
+      "jsonpath": "$.optionalDependencies['@yacosta738/refranero-win32-x64']"
+    }
+  ]
+}
