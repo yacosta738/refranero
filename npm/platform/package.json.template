@@ -1,0 +1,10 @@
+{
+  "name": "@yacosta738/refranero-__OS__-__CPU__",
+  "version": "__VERSION__",
+  "description": "Native refranero executable for __OS__ __CPU__",
+  "license": "MIT",
+  "os": ["__OS__"],
+  "cpu": ["__CPU__"],
+  "publishConfig": {"access": "public"},
+  "files": ["bin"]
+}

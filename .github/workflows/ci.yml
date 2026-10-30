@@ -1,0 +1,76 @@
+name: CI
+on:
+  push:
+  pull_request:
+permissions:
+  contents: read
+jobs:
+  rust:
+    strategy:
+      matrix:
+        os: [ubuntu-latest, macos-latest, windows-latest]
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: clippy, rustfmt
+      - run: cargo fmt --all -- --check
+      - run: cargo clippy --all-targets -- -D warnings
+      - run: cargo test --all-targets
+  npm:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+      - run: node --check npm/wrapper/bin/refranero.mjs
+      - run: node --check scripts/prepare-npm.mjs
+      - run: node --test tests/npm-packaging.test.mjs
+      - run: cd npm/wrapper && npm pack --dry-run
+  native-packages:
+    name: Native package (${{ matrix.target }})
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - target: x86_64-unknown-linux-gnu
+            os: ubuntu-22.04
+            package: linux-x64
+          - target: aarch64-unknown-linux-gnu
+            os: ubuntu-24.04-arm
+            package: linux-arm64
+          - target: x86_64-apple-darwin
+            os: macos-15-intel
+            package: darwin-x64
+          - target: aarch64-apple-darwin
+            os: macos-latest
+            package: darwin-arm64
+          - target: x86_64-pc-windows-msvc
+            os: windows-2025
+            package: win32-x64
+          - target: aarch64-pc-windows-msvc
+            os: windows-11-arm
+            package: win32-arm64
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: ${{ matrix.target }}
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+      - name: Build native target
+        run: cargo build --release --target ${{ matrix.target }}
+      - name: Prepare platform package (Unix)
+        if: runner.os != 'Windows'
+        run: node scripts/prepare-npm.mjs ${{ matrix.target }} target/${{ matrix.target }}/release/refranero 0.1.0
+      - name: Prepare platform package (Windows)
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: node scripts/prepare-npm.mjs ${{ matrix.target }} target/${{ matrix.target }}/release/refranero.exe 0.1.0
+      - name: Verify platform package
+        shell: bash
+        run: cd npm/dist/${{ matrix.package }} && npm pack --dry-run
