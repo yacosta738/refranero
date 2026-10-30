@@ -20,6 +20,7 @@ Delegated direct. Añadir gestión de versiones/releases con Release Please y fi
 - Refranero usará Release Please para changelog, versión, tag y GitHub Release; no publica paquetes npm ni binarios.
 - Release Please requiere `APP_ID` y `APP_PRIVATE_KEY` configurados como secrets de Refranero, siguiendo AgentSync. El usuario confirmó que está configurando NPM_TOKEN; ese token no sustituye credenciales de GitHub App y no lo usa este flujo.
 - `actionlint .github/workflows/ci.yml .github/workflows/release.yml`: PASS.
+- GitHub PR run expuso que `dtolnay/rust-toolchain` pinned requiere el input `toolchain`; añadí `stable` en ambos jobs CI. Pendiente nuevo run.
 - `python3 -m json.tool` para ambos archivos de Release Please: PASS.
 - `git diff --check`: PASS; búsqueda de `uses:` sin SHA completo: cero resultados.
 - `gh auth status` y `gh repo view yacosta738/refranero`: acceso confirmado.
