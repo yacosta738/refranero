@@ -6,6 +6,8 @@ rust-version = "1.85"
 description = "Offline-first command-line proverbs with optional Cervantes and Wayback imports"
 license = "MIT"
 readme = "README.md"
+repository = "https://github.com/yacosta738/refranero"
+homepage = "https://github.com/yacosta738/refranero"
 keywords = ["proverbs", "cli", "refranero", "spanish"]
 categories = ["command-line-utilities"]
 

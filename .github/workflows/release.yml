@@ -49,3 +49,137 @@ jobs:
           manifest-file: .release-please-manifest.json
           target-branch: main
           fork: false
+
+  publish-crates:
+    name: Publish to crates.io
+    needs: release-please
+    if: needs.release-please.outputs.release_created == 'true'
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        with:
+          ref: ${{ needs.release-please.outputs.tag_name }}
+      - uses: dtolnay/rust-toolchain@683b588c487a69d01f6c6ddf40f036ff682cc2c8 # v1
+        with:
+          toolchain: stable
+      - name: Publish refranero-cli
+        run: cargo publish --locked
+        env:
+          CARGO_REGISTRY_TOKEN: ${{ secrets.CARGO_REGISTRY_TOKEN }}
+
+  publish-npm:
+    name: Publish npm packages
+    needs: release-please
+    if: needs.release-please.outputs.release_created == 'true'
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - target: x86_64-unknown-linux-gnu
+            os: ubuntu-22.04
+            package: linux-x64
+          - target: aarch64-unknown-linux-gnu
+            os: ubuntu-24.04-arm
+            package: linux-arm64
+          - target: x86_64-apple-darwin
+            os: macos-15-intel
+            package: darwin-x64
+          - target: aarch64-apple-darwin
+            os: macos-latest
+            package: darwin-arm64
+          - target: x86_64-pc-windows-msvc
+            os: windows-2025
+            package: win32-x64
+          - target: aarch64-pc-windows-msvc
+            os: windows-11-arm
+            package: win32-arm64
+    runs-on: ${{ matrix.os }}
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        with:
+          ref: ${{ needs.release-please.outputs.tag_name }}
+      - uses: dtolnay/rust-toolchain@683b588c487a69d01f6c6ddf40f036ff682cc2c8 # v1
+        with:
+          toolchain: stable
+          targets: ${{ matrix.target }}
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version: '26'
+          registry-url: 'https://registry.npmjs.org'
+      - name: Build native target
+        run: cargo build --release --target ${{ matrix.target }}
+      - name: Prepare platform package (Unix)
+        if: runner.os != 'Windows'
+        run: node scripts/prepare-npm.mjs ${{ matrix.target }} target/${{ matrix.target }}/release/refranero ${{ needs.release-please.outputs.version }}
+      - name: Prepare platform package (Windows)
+        if: runner.os == 'Windows'
+        run: node scripts/prepare-npm.mjs ${{ matrix.target }} target/${{ matrix.target }}/release/refranero.exe ${{ needs.release-please.outputs.version }}
+      - name: Publish platform package
+        run: npm publish --access public
+        working-directory: npm/dist/${{ matrix.package }}
+        env:
+          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
+
+  publish-npm-wrapper:
+    name: Publish npm wrapper
+    needs: [release-please, publish-npm]
+    if: needs.release-please.outputs.release_created == 'true'
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        with:
+          ref: ${{ needs.release-please.outputs.tag_name }}
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version: '26'
+          registry-url: 'https://registry.npmjs.org'
+      - name: Publish wrapper package
+        run: npm publish --access public
+        working-directory: npm/wrapper
+        env:
+          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
+
+  publish-docker:
+    name: Publish Docker image
+    needs: release-please
+    if: needs.release-please.outputs.release_created == 'true'
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      packages: write
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        with:
+          ref: ${{ needs.release-please.outputs.tag_name }}
+      - name: Set up QEMU
+        uses: docker/setup-qemu-action@29109295f81e9208d7d86ff1c6c12d2833863392 # v3.6.0
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@e468171a9de216ec08956ac3ada2f0791b6bd435 # v3.11.1
+      - name: Log in to Docker Hub
+        uses: docker/login-action@5e57cd118135c172c3672efd75eb46360885c0ef # v3.6.0
+        with:
+          username: ${{ secrets.DOCKERHUB_USERNAME }}
+          password: ${{ secrets.DOCKERHUB_TOKEN }}
+      - name: Log in to GHCR
+        uses: docker/login-action@5e57cd118135c172c3672efd75eb46360885c0ef # v3.6.0
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+      - name: Build and push
+        uses: docker/build-push-action@0adf9959216b96bec444f325f1e493d4aa344497 # v6.14.0
+        with:
+          context: .
+          platforms: linux/amd64,linux/arm64
+          push: true
+          tags: |
+            yacosta738/refranero:${{ needs.release-please.outputs.version }}
+            yacosta738/refranero:latest
+            ghcr.io/yacosta738/refranero:${{ needs.release-please.outputs.version }}
+            ghcr.io/yacosta738/refranero:latest
