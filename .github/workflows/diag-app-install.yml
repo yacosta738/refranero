@@ -1,0 +1,21 @@
+name: Diagnose App Installation
+on:
+  workflow_dispatch: {}
+
+permissions:
+  contents: read
+
+jobs:
+  owner-scope:
+    name: Token scoped to account only (no repo filter)
+    runs-on: ubuntu-latest
+    steps:
+      - name: Generate GitHub App token (owner only)
+        id: app-token
+        uses: actions/create-github-app-token@64ab729a6294000f5aa4a4bc0b73d1f32bc45510 # v3
+        with:
+          client-id: ${{ secrets.APP_CLIENT_ID }}
+          private-key: ${{ secrets.APP_PRIVATE_KEY }}
+          owner: ${{ github.repository_owner }}
+      - name: Report
+        run: echo "Installation id -> ${{ steps.app-token.outputs.installation-id }}"
