@@ -17,5 +17,7 @@ jobs:
           client-id: ${{ secrets.APP_CLIENT_ID }}
           private-key: ${{ secrets.APP_PRIVATE_KEY }}
           owner: ${{ github.repository_owner }}
-      - name: Report
-        run: echo "Installation id -> ${{ steps.app-token.outputs.installation-id }}"
+      - name: List repositories covered by this installation token
+        env:
+          GH_TOKEN: ${{ steps.app-token.outputs.token }}
+        run: gh api /installation/repositories --jq '.repositories[].full_name'
