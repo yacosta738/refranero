@@ -157,6 +157,7 @@ jobs:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
         with:
           ref: ${{ needs.release-please.outputs.tag_name }}
+          fetch-depth: 0
       - name: Set up QEMU
         uses: docker/setup-qemu-action@29109295f81e9208d7d86ff1c6c12d2833863392 # v3.6.0
       - name: Set up Docker Buildx
@@ -172,7 +173,18 @@ jobs:
           registry: ghcr.io
           username: ${{ github.actor }}
           password: ${{ secrets.GITHUB_TOKEN }}
-      - name: Build and push
+      - name: Check if this is the newest release
+        id: latest_check
+        run: |
+          current="${{ needs.release-please.outputs.version }}"
+          newest=$(git tag --list 'v*' | sed 's/^v//' | sort -V | tail -n1)
+          if [ "$current" = "$newest" ]; then
+            echo "is_latest=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "is_latest=false" >> "$GITHUB_OUTPUT"
+            echo "::notice::Skipping 'latest' tag: $current is not the newest tagged version ($newest)."
+          fi
+      - name: Build and push (version tags)
         uses: docker/build-push-action@0adf9959216b96bec444f325f1e493d4aa344497 # v6.14.0
         with:
           context: .
@@ -180,6 +192,14 @@ jobs:
           push: true
           tags: |
             yacosta738/refranero:${{ needs.release-please.outputs.version }}
-            yacosta738/refranero:latest
             ghcr.io/yacosta738/refranero:${{ needs.release-please.outputs.version }}
+      - name: Build and push (latest tag)
+        if: steps.latest_check.outputs.is_latest == 'true'
+        uses: docker/build-push-action@0adf9959216b96bec444f325f1e493d4aa344497 # v6.14.0
+        with:
+          context: .
+          platforms: linux/amd64,linux/arm64
+          push: true
+          tags: |
+            yacosta738/refranero:latest
             ghcr.io/yacosta738/refranero:latest

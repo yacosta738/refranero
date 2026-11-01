@@ -11,6 +11,7 @@ RUN apt-get update \
 
 COPY Cargo.toml Cargo.lock ./
 COPY src ./src
+COPY data ./data
 
 RUN cargo build --release --locked \
     && strip target/release/refranero
@@ -19,7 +20,9 @@ RUN cargo build --release --locked \
 FROM debian:bookworm-slim AS runtime
 
 RUN groupadd --system refranero \
-    && useradd --system --gid refranero --create-home --home-dir /home/refranero refranero
+    && useradd --system --gid refranero --create-home --home-dir /home/refranero refranero \
+    && mkdir -p /home/refranero/.local/share/refranero \
+    && chown -R refranero:refranero /home/refranero
 
 COPY --from=builder /build/target/release/refranero /usr/local/bin/refranero
 
