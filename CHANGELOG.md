@@ -1,5 +1,13 @@
 # Changelog
 
+## [0.3.1](https://github.com/yacosta738/refranero/compare/v0.3.0...v0.3.1) (2026-11-01)
+
+
+### Chores
+
+* **deps:** update docker/setup-buildx-action action to v4 ([#20](https://github.com/yacosta738/refranero/issues/20)) ([ec261d6](https://github.com/yacosta738/refranero/commit/ec261d6b0ae2858556eda52c95d16cbecbdbaf04))
+* **deps:** update docker/setup-qemu-action action to v4 ([#21](https://github.com/yacosta738/refranero/issues/21)) ([9bcda4c](https://github.com/yacosta738/refranero/commit/9bcda4c22a69b356f7dec3595404ebbcad59df80))
+
 ## [0.3.0](https://github.com/yacosta738/refranero/compare/v0.2.0...v0.3.0) (2026-11-01)
 
 
