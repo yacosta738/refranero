@@ -1,5 +1,22 @@
 # Changelog
 
+## [0.3.0](https://github.com/yacosta738/refranero/compare/v0.2.0...v0.3.0) (2026-11-01)
+
+
+### Features
+
+* **release:** publish to crates.io, npm, Docker Hub and GHCR on release ([#12](https://github.com/yacosta738/refranero/issues/12)) ([fe1a225](https://github.com/yacosta738/refranero/commit/fe1a22588b324865a2cc5462a2e388217793cc3e))
+
+
+### Chores
+
+* **deps:** update docker/build-push-action action to v6.19.2 ([#14](https://github.com/yacosta738/refranero/issues/14)) ([ce88dae](https://github.com/yacosta738/refranero/commit/ce88dae5a5d10d61dc7223c55e942acc45a2cfb5))
+* **deps:** update docker/build-push-action action to v7 ([#18](https://github.com/yacosta738/refranero/issues/18)) ([e047770](https://github.com/yacosta738/refranero/commit/e047770dcfbc3e779c08c42220f73a342a0a4e52))
+* **deps:** update docker/login-action action to v3.7.0 ([#15](https://github.com/yacosta738/refranero/issues/15)) ([434540d](https://github.com/yacosta738/refranero/commit/434540d18533a1b2851440843cfa0f94267ec043))
+* **deps:** update docker/login-action action to v4 ([#19](https://github.com/yacosta738/refranero/issues/19)) ([490e260](https://github.com/yacosta738/refranero/commit/490e2600700d9aa35784a5211b2008cf607ef664))
+* **deps:** update docker/setup-buildx-action action to v3.12.0 ([#16](https://github.com/yacosta738/refranero/issues/16)) ([dbfbd5f](https://github.com/yacosta738/refranero/commit/dbfbd5f57ceb41be19cb612e3be3147a3e3b4513))
+* **deps:** update docker/setup-qemu-action action to v3.7.0 ([#17](https://github.com/yacosta738/refranero/issues/17)) ([ed4a25c](https://github.com/yacosta738/refranero/commit/ed4a25c55630d254c3463295ca975bf1bd102902))
+
 ## [0.2.0](https://github.com/yacosta738/refranero/compare/v0.1.0...v0.2.0) (2026-11-01)
 
 
