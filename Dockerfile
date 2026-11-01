@@ -25,10 +25,13 @@ RUN groupadd --system refranero \
     && chown -R refranero:refranero /home/refranero
 
 COPY --from=builder /build/target/release/refranero /usr/local/bin/refranero
+COPY docker-entrypoint.sh /usr/local/bin/docker-entrypoint.sh
+
+RUN chmod 755 /usr/local/bin/docker-entrypoint.sh
 
 USER refranero
 WORKDIR /home/refranero
 VOLUME ["/home/refranero/.local/share"]
 
-ENTRYPOINT ["refranero"]
+ENTRYPOINT ["/usr/local/bin/docker-entrypoint.sh"]
 CMD ["--help"]

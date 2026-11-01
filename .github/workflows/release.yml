@@ -177,12 +177,32 @@ jobs:
         id: latest_check
         run: |
           current="${{ needs.release-please.outputs.version }}"
-          newest=$(git tag --list 'v*' | sed 's/^v//' | sort -V | tail -n1)
-          if [ "$current" = "$newest" ]; then
+          # A prerelease must never own the 'latest' tag.
+          case "$current" in
+            *-*)
+              echo "is_latest=false" >> "$GITHUB_OUTPUT"
+              echo "::notice::Skipping 'latest' tag: $current is a prerelease."
+              exit 0
+              ;;
+          esac
+          # Only stable tags count as "latest". Prereleases such as v1.0.0-rc.1
+          # must never outrank a stable release, so they are filtered out
+          # before comparing versions.
+          newest=$(
+            git tag --list 'v[0-9]*' \
+              | sed 's/^v//' \
+              | grep -E '^[0-9]+\.[0-9]+\.[0-9]+$' \
+              | sort -V \
+              | tail -n1
+          )
+          if [ -z "$newest" ]; then
+            echo "is_latest=false" >> "$GITHUB_OUTPUT"
+            echo "::notice::Skipping 'latest' tag: no stable version tag found."
+          elif [ "$(printf '%s\n%s\n' "$newest" "$current" | sort -V | tail -n1)" = "$current" ]; then
             echo "is_latest=true" >> "$GITHUB_OUTPUT"
           else
             echo "is_latest=false" >> "$GITHUB_OUTPUT"
-            echo "::notice::Skipping 'latest' tag: $current is not the newest tagged version ($newest)."
+            echo "::notice::Skipping 'latest' tag: $current is older than the newest stable version ($newest)."
           fi
       - name: Build and push (version tags)
         uses: docker/build-push-action@0adf9959216b96bec444f325f1e493d4aa344497 # v6.14.0
