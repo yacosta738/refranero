@@ -67,26 +67,59 @@ pub fn import_virtual(client: &Client, category: Category, limit: usize) -> Resu
     Ok(parse_virtual(&html, category, &url, limit))
 }
 
-/// Extract the text from blockquotes; reference links remain category-level until verified.
+/// Extract saying text and a validated per-entry citation from blockquotes.
+/// Fall back to the category page when a citation is missing or unsafe.
 fn parse_virtual(html: &str, category: Category, url: &str, limit: usize) -> Vec<NewSaying> {
     let doc = Html::parse_document(html);
     let selector = Selector::parse("blockquote").expect("static CSS selector");
     doc.select(&selector)
-        .map(|el| el.text().collect::<String>())
-        .map(|text| normalize(&text))
-        .filter(|text| !text.is_empty() && text.chars().count() <= 3000)
-        .take(limit)
-        .map(|text| NewSaying {
-            text,
-            category: category.as_str().into(),
-            language: "es".into(),
-            source: "cervantes_virtual".into(),
-            source_url: url.into(),
-            original_url: None,
-            captured_at: None,
-            group_id: None,
+        .filter_map(|el| {
+            let text = normalize(&el.text().collect::<String>());
+            if text.is_empty() || text.chars().count() > 3000 {
+                return None;
+            }
+            let source_url = el
+                .value()
+                .attr("cite")
+                .and_then(verified_virtual_citation_url)
+                .unwrap_or_else(|| url.to_owned());
+            Some(NewSaying {
+                text,
+                category: category.as_str().into(),
+                language: "es".into(),
+                source: "cervantes_virtual".into(),
+                source_url,
+                original_url: Some(url.to_owned()),
+                captured_at: None,
+                group_id: None,
+            })
         })
+        .take(limit)
         .collect()
+}
+
+fn verified_virtual_citation_url(raw: &str) -> Option<String> {
+    let mut citation = Url::parse(raw).ok()?;
+    if !matches!(citation.scheme(), "http" | "https")
+        || !matches!(
+            citation.host_str(),
+            Some("www.cervantesvirtual.com") | Some("cervantesvirtual.com")
+        )
+        || !citation.username().is_empty()
+        || citation.password().is_some()
+    {
+        return None;
+    }
+    let has_valid_port = matches!(
+        (citation.scheme(), citation.port()),
+        ("http", None | Some(80)) | ("https", None | Some(443))
+    );
+    if !has_valid_port {
+        return None;
+    }
+    citation.set_port(None).ok()?;
+    citation.set_scheme("https").ok()?;
+    Some(citation.to_string())
 }
 
 #[derive(Debug, Deserialize)]
@@ -239,6 +272,64 @@ mod tests {
         let entries = parse_virtual(html, Category::Refran, "https://example.org/", 3);
         assert_eq!(entries.len(), 1);
         assert_eq!(entries[0].text, "A falta de pan, buenas son tortas.");
+    }
+
+    #[test]
+    fn uses_validated_per_entry_citation_and_keeps_category_provenance() {
+        let category_url = "https://www.cervantesvirtual.com/portales/refranes_dichos_proverbios_citas_adivinanzas/refran/";
+        let html = r#"<blockquote cite="http://www.cervantesvirtual.com/obra-visor/refranes-alusivos-al-tiempo/html/">No hay sábado sin sol.</blockquote>"#;
+
+        let entries = parse_virtual(html, Category::Refran, category_url, 1);
+
+        assert_eq!(entries.len(), 1);
+        assert_eq!(
+            entries[0].source_url,
+            "https://www.cervantesvirtual.com/obra-visor/refranes-alusivos-al-tiempo/html/"
+        );
+        assert_eq!(entries[0].original_url.as_deref(), Some(category_url));
+    }
+
+    #[test]
+    fn falls_back_to_category_for_relative_citations() {
+        let category_url = "https://www.cervantesvirtual.com/portales/refranes_dichos_proverbios_citas_adivinanzas/refran/";
+        let html = r#"<blockquote cite="../../obra-visor/refranes-alusivos-al-tiempo/html/">No hay sábado sin sol.</blockquote>"#;
+
+        let entries = parse_virtual(html, Category::Refran, category_url, 1);
+
+        assert_eq!(entries.len(), 1);
+        assert_eq!(entries[0].source_url, category_url);
+    }
+
+    #[test]
+    fn rejects_citation_ports_that_do_not_match_the_scheme() {
+        let category_url = "https://www.cervantesvirtual.com/portales/refranes_dichos_proverbios_citas_adivinanzas/refran/";
+        let html = r#"
+            <blockquote cite="https://www.cervantesvirtual.com:80/obra-visor/one/">Uno.</blockquote>
+            <blockquote cite="http://www.cervantesvirtual.com:443/obra-visor/two/">Dos.</blockquote>
+        "#;
+
+        let entries = parse_virtual(html, Category::Refran, category_url, 2);
+
+        assert_eq!(entries.len(), 2);
+        assert!(entries.iter().all(|entry| entry.source_url == category_url));
+    }
+
+    #[test]
+    fn falls_back_to_category_for_untrusted_or_invalid_citations() {
+        let category_url = "https://www.cervantesvirtual.com/portales/refranes_dichos_proverbios_citas_adivinanzas/refran/";
+        let html = r#"
+            <blockquote cite="https://evil.example/redirect">Uno.</blockquote>
+            <blockquote cite="javascript:alert(1)">Dos.</blockquote>
+            <blockquote>Tres.</blockquote>
+        "#;
+
+        let entries = parse_virtual(html, Category::Refran, category_url, 3);
+
+        assert_eq!(entries.len(), 3);
+        for entry in entries {
+            assert_eq!(entry.source_url, category_url);
+            assert_eq!(entry.original_url.as_deref(), Some(category_url));
+        }
     }
 
     #[test]

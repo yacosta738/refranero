@@ -7,23 +7,69 @@
 [![ci](https://img.shields.io/github/actions/workflow/status/yacosta738/refranero/ci.yml?branch=main&style=flat-square&label=ci)](https://github.com/yacosta738/refranero/actions/workflows/ci.yml)
 [![license](https://img.shields.io/github/license/yacosta738/refranero?style=flat-square&label=license)](./LICENSE)
 
-[![Rust](https://img.shields.io/badge/rust-1.85%2B-000?logo=rust&style=for-the-badge)](https://www.rust-lang.org)
+[![Rust](https://img.shields.io/badge/rust-1.89%2B-000?logo=rust&style=for-the-badge)](https://www.rust-lang.org)
 [![Node.js](https://img.shields.io/badge/node-%3E%3D18-000?logo=node.js&style=for-the-badge)](https://nodejs.org)
 [![SQLite](https://img.shields.io/badge/sqlite-bundled-000?logo=sqlite&style=for-the-badge)](https://www.sqlite.org)
 [![Docker](https://img.shields.io/badge/docker-000?logo=docker&style=for-the-badge)](./Dockerfile)
 [![GitHub Actions](https://img.shields.io/badge/release-GitHub%20Actions-000?logo=githubactions&style=for-the-badge)](./.github/workflows/release.yml)
 
-Offline-first Rust command-line reader for traditional Spanish sayings, with optional imports from the **Biblioteca Virtual Miguel de Cervantes** and the historical **Centro Virtual Cervantes** via the **Wayback Machine**.
+![Refranero CLI banner with its offline-first description, supported technologies, terminal prompt, and illustrated books](assets/refranero.png)
 
-> **Status: prototype, not yet published to npm.** The runtime has local test coverage and the current-portal import has been exercised against the live site. Online import still depends on external websites' availability and HTML structures.
+Refranero is an offline-first command-line reader for Spanish proverbs
+(*refranes*) and related sayings. It reads from a local SQLite catalog. You
+can import more entries from the **Biblioteca Virtual Miguel de Cervantes**
+and the historical **Centro Virtual Cervantes** index through the
+**Wayback Machine**.
 
-## Releases
+## Quick start: get a random refrán
 
-Release Please tracks Conventional Commits on `main` and opens or updates a release pull request. After approval and merge, it creates the version tag and GitHub Release. The workflow uses a GitHub App with the repository secrets `APP_CLIENT_ID` and `APP_PRIVATE_KEY`, so its PR, tag, and release events can start other workflows. Install the App on this repository with **Contents**, **Issues**, and **Pull requests** permissions set to read and write. Configure the secrets before enabling releases. After a release is created, the workflow publishes the npm packages and the crate.
+The main use case needs no subcommand and no options. After installing the CLI,
+run:
 
-## Quick start
+```sh
+refranero
+```
 
-Rust toolchain (1.89+) is required to build from source:
+This prints one random Spanish refrán from the local catalog. The output shows
+the saying, its category and source, its local entry ID, and a source URL. On
+first use, Refranero creates the SQLite catalog and seeds it with 16 starter
+entries.
+
+To run it once without a global install, use either npm or pnpm:
+
+```sh
+npx --yes @yacosta738/refranero@latest
+# Or:
+pnpm dlx @yacosta738/refranero@latest
+```
+
+Both commands run the default random-refrán use case. Node.js 18 or newer is
+required for the npm and pnpm packages.
+
+## Installation options
+
+Choose one installation method. The npm and pnpm packages include a native
+executable for supported macOS, Windows, and Linux (glibc) platforms.
+
+### Install globally with npm
+
+```sh
+npm install --global @yacosta738/refranero
+refranero
+```
+
+### Install from crates.io
+
+Rust 1.89 or newer is required to install or build from source.
+
+```sh
+cargo install refranero-cli
+refranero
+```
+
+### Build and run from source
+
+From the repository root, use Cargo to run the CLI without installing it:
 
 ```sh
 cargo run --
@@ -34,104 +80,296 @@ cargo run -- open
 cargo run -- stats
 ```
 
-After the npm packages are published, install and run the CLI with:
+### Run the Docker image
 
 ```sh
-npm install -g @yacosta738/refranero
-refranero
+docker run --rm yacosta738/refranero:latest --offline
+```
+
+The container displays CLI help when no arguments are provided. Pass
+`--offline` to run the default random-refrán command without scheduling a
+catalog refresh.
+
+## Common use cases
+
+### Get more than one random refrán
+
+The default count is one. `--count` accepts values from 1 to 20.
+
+```sh
 refranero --count 3
+```
+
+### Choose a category or language
+
+The default category is `refran`, and the default language is Spanish (`es`).
+Available category values are `refran`, `paremia`, `proverbio`, `dicho`,
+`adivinanza`, and `cita`.
+
+The starter catalog includes `refran`, `proverbio`, and `dicho` entries. To
+query another category, import matching entries first. Use `sync virtual` for
+current-portal categories or `sync wayback` for historical `paremia` entries.
+
+```sh
+refranero --category proverbio --count 3
+refranero --category adivinanza
+refranero --lang en
+refranero --lang ca
+```
+
+The result depends on entries in the local catalog. Refranero does not
+translate entries automatically. The starter catalog includes Spanish entries
+and one English and one Catalan entry.
+
+If the selected language and category have no local entries, the command
+reports that no matching entries are available. Import more records with
+`import` or `sync` and try again.
+
+### Print JSON
+
+Use `--json` when another program needs to read the random results. The JSON
+includes each entry's ID, text, category, language, source, and provenance
+fields.
+
+```sh
+refranero --json --count 3
+```
+
+### Open a source in the browser
+
+Use `--browser` to open the source URL for each randomly selected entry:
+
+```sh
 refranero --browser
-refranero open 1
+refranero --browser --count 3
+```
+
+Use `open` to open a particular local entry by ID. With no ID, `open` selects
+a random entry and opens its source URL. The default is a Spanish refrán;
+`--lang` and `--category` can change the selection.
+
+```sh
+refranero open 12
+refranero open
+```
+
+### Inspect the local catalog
+
+`stats` prints the SQLite database path, the total number of entries, and
+counts grouped by source, language, and category.
+
+```sh
 refranero stats
 ```
 
-## Import more local data (explicit network access)
+### Use a separate database
 
-The default invocation selects only `refran`, so other categories are always opt-in:
+By default, the catalog is stored in the operating system's per-user local data
+directory under `refranero/catalog.sqlite3`. Use `--db` to select another
+SQLite file. The option is available to all commands.
 
 ```sh
-refranero                    # One Spanish refrán
-refranero --count 5          # Five random Spanish refranes
-refranero --category adivinanza
-refranero --category proverbio
-refranero --lang en          # Limited verified English seed (not automatic translation)
-refranero --browser          # Show and open the selected source page
-refranero open 1             # Open an exact catalog ID
+refranero --db ./catalog.sqlite3 --offline --count 3
+refranero --db ./catalog.sqlite3 stats
 ```
 
-Catalog maintenance also supports offline JSON arrays with a source URL and explicit provenance:
+## Import and refresh data
+
+The random command reads local data first. If the catalog has never completed
+a current-portal refresh, or the last successful refresh is more than 24 hours
+old, Refranero schedules a background refresh after printing the result. It
+does not wait for the refresh to finish. Use `--offline` to skip this
+automatic refresh and use only the local catalog.
+
+The automatic refresh updates the current Cervantes Virtual snapshot. It does
+not replace entries imported from the historical CVC/Wayback source. Refresh
+output is appended to a `catalog.refresh.log` file next to the SQLite
+database.
+
+Current-portal entries use the per-entry reference in the page's `blockquote`
+`cite` attribute. Refranero validates the host and upgrades HTTP references to
+HTTPS. If a page has no safe `cite` value, Refranero falls back to the category
+page. The category URL used during import is retained in `original_url`.
+
+When upgrading an existing catalog, Refranero migrates links in the bundled
+starter records and marks the current-portal snapshot as stale. Run
+`refranero sync virtual --limit 50` once to replace that snapshot immediately
+using the same per-page limit as automatic refresh. This replaces prior
+`cervantes_virtual` entries but leaves CVC/Wayback records untouched. Otherwise,
+the next online random read schedules the refresh in the background.
+
+Only the random command schedules this automatic refresh. `open`, `stats`,
+and `import` do not schedule it. An explicit `sync` command makes its own
+network requests.
+
+### Import a local JSON file
+
+`import` adds validated records from a JSON array. See
+[`data/import-example.json`](./data/import-example.json) for the required
+fields and format. Optional provenance fields are `original_url`,
+`captured_at`, and `group_id`. Imports are idempotent for matching text,
+category, language, and source records. A single import file can contain at
+most 10,000 records.
 
 ```sh
 refranero import data/import-example.json
 ```
 
+### Import current Cervantes Virtual pages
 
-Import a small portion of current category pages:
+These commands make network requests. Without `--kind`, `sync virtual` fetches
+the five supported thematic pages and replaces the current
+`cervantes_virtual` snapshot. With `--kind`, it fetches one category and adds
+unseen entries. The default limit is 20 per page; the maximum is 50.
 
 ```sh
+# Refresh all five supported categories.
+refranero sync virtual
+
+# Import only one category.
 refranero sync virtual --kind refran --limit 20
 refranero sync virtual --kind proverbio --limit 20
 refranero sync virtual --kind adivinanza --limit 20
 ```
 
-Import a historical **index of Spanish paremias**, discovered using the Wayback availability API. `--year` selects an approximate capture year. This phase extracts linked Spanish entries, **not multilingual translations**:
+Supported `--kind` values are `refran`, `proverbio`, `dicho`, `adivinanza`,
+and `cita`. `paremia` is a catalog category, but it is not a current-portal
+page type.
+
+### Import a historical CVC index through the Wayback Machine
+
+`sync wayback` looks up an archived alphabetical index and imports linked
+Spanish paremia entries. The defaults are letter `A`, year `2020`, and limit
+`20`. The letter must be one ASCII letter. The year must be from 1996 through
+2100, and the limit must be from 1 through 50.
 
 ```sh
 refranero sync wayback --letter A --year 2020 --limit 20
 refranero --category paremia
 ```
 
-Manual `sync` commands download records when requested. A normal random invocation first reads and prints from SQLite; if no successful full portal refresh exists, or the last one was more than 24 hours ago, it launches a detached background worker and exits without waiting for the network. The worker fetches the five current-portal categories and atomically replaces only the `cervantes_virtual` snapshot. CVC/Wayback records remain untouched. A SQLite lease prevents duplicate workers and expires after five minutes if a worker is interrupted. Worker output is appended to a `catalog.refresh.log` file next to the database. Worker failure leaves the cache intact and releases the lease; the next normal invocation can retry. Each HTTP request has a 5-second timeout; the portal's full refrain page currently exceeds 2 MiB, so each response is bounded at 8 MiB. A valid non-empty snapshot is required; on request, parse, or validation failure the previous snapshot and refresh timestamp remain unchanged. Use `refranero --offline` to skip refresh scheduling. `stats`, `open`, and explicit category-limited `sync` do not trigger automatic refresh. The default path is the system's per-user local data directory (`refranero/catalog.sqlite3`). Change it via `--db path/to/catalog.sqlite3`.
+This import stores links found in the alphabetical index. It does not
+download and parse the full historical ficha for every entry. It does not
+create translations. A Wayback availability result does not guarantee that
+each linked page was archived.
 
-The program seeds a **small starter dataset of 16 sayings** from category pages and a few CVC fichas. Current-portal entries link to the **category page** containing the entry; the CVC seed entries have individual ficha URLs. Some CVC URLs may temporarily fail during site maintenance. Imports are idempotent by `(text, category, language, source)`. Historical captures record `original_url`, `captured_at`, `group_id=cvc:Par` and a Wayback replay lookup URL. **A replay lookup does not guarantee the individual ficha was archived.** The indexed Wayback import currently stores *only alphabetical-list links*, not their full historical ficha HTML or translations; extracting those is a future work item.
+`--offline` disables the automatic background refresh for random reads. It
+does not turn an explicit `sync` command into an offline operation. `sync`
+always requests remote pages.
 
-### Known limitations
+## Command reference
 
-- The starter dataset includes 14 Spanish sayings plus one English (`--lang en`) and one Catalan (`--lang ca`) CVC correspondence, both under `group_id=cvc:59530`. Other languages have no starter entries. No translations are invented.
-- The CVC site has indexed multilingual fichas, but direct access is intermittently unavailable; the archive lookup API and captured pages were not reachable from the authoring environment. Historical scraping code has only synthetic HTML fixtures, **not an end-to-end capture test**.
-- The Cervantes Virtual adapter currently extracts `<blockquote>` text and links to each category page. It deliberately does **not** claim to extract and validate each entry's exact bibliographic URL, meaning or riddle answer.
-- The old CVC alphabetical listing covers paremias of different subtypes; they are classified as `paremia` until individual fichas are parsed.
-- `sync` is intentionally limited to 50 entries per page/letter and is not a bulk crawling engine. Respect robots restrictions, site rate limits and legal terms.
-- No automatic deduplication *across sources*, as otherwise provenance would be lost.
+### Random selection
+
+- `refranero` or `refranero random`: print random local entries. The default is
+  one Spanish `refran`.
+- `--count <N>`: choose 1–20 entries. The default is `1`.
+- `--category <CATEGORY>`: filter random results and random `open` selections.
+  The default is `refran`.
+- `--lang <CODE>`: filter by language code, such as `es`, `en`, or `ca`. The
+  default is `es`.
+- `--json`: print random results as JSON instead of terminal-friendly text.
+- `--browser`: open the source URL for each random result. The default is off.
+- `--offline`: skip automatic refresh scheduling for random reads. The default
+  is off.
+
+### Catalog commands
+
+- `open [ID]`: open an entry by ID, or select and open a random Spanish
+  refrán when no ID is given.
+- `stats`: show local catalog totals by source, language, and category. This
+  command does not make a network request.
+- `import <FILE>`: add validated records from a local JSON array. The maximum
+  is 10,000 records per file.
+- `sync virtual`: import current Cervantes Virtual entries. The default is all
+  five pages and 20 entries per page.
+- `sync wayback`: import links from a historical CVC alphabetical index. The
+  defaults are letter `A`, year `2020`, and limit `20`.
+
+### General options
+
+- `--db <PATH>`: use a specified SQLite database file. The default is in the
+  per-user local data directory.
+- `--help` and `--version`: show command help or the installed CLI version.
+
+For all parser-level details, run `refranero --help` or `refranero sync --help`.
+
+## Data and known limitations
+
+- The starter catalog contains 16 entries: 14 Spanish, one English, and one
+  Catalan. Other languages depend on imported local data.
+- Three Spanish starter entries from the retired CVC Refranero use verified
+  Wayback snapshots. The English and Catalan starter entries use active
+  references from Idiomingo and PCCD. Their retired CVC URLs remain in
+  `original_url` as provenance. The source label identifies the original
+  collection; `source_url` is the link opened by the browser. The original CVC
+  pages may return 404 because that site has been retired.
+- Current Cervantes Virtual imports extract saying text from page blockquotes
+  and use each blockquote's validated `cite` reference. They fall back to the
+  category page only when the page does not provide a safe reference. The
+  citation can open the source work or author portal instead of a standalone
+  entry page. The CLI prints the refrán before the browser opens the reference.
+- Historical CVC index entries are classified as `paremia` because the index
+  includes different subtypes. Historical imports do not extract full ficha
+  content or translations.
+- Imports are limited to 50 entries per page or letter. Refranero is not a
+  bulk-crawling tool. Respect each site's robots rules, rate limits, and terms.
+- Refranero does not deduplicate across different sources because that could
+  remove provenance.
+- Online imports depend on external sites and their page structures. The old
+  CVC Refranero pages are no longer available live; the starter catalog uses
+  verified Wayback captures or active reference pages instead.
 
 ## Architecture
 
 ```text
 src/
-  main.rs       CLI and orchestration
-  domain.rs     Category, NewSaying and Saying
-  store.rs      SQLite catalog repository with validation
-  ingest.rs     Opt-in current-portal and historical-Wayback adapters
+  main.rs       CLI commands and orchestration
+  domain.rs     Category and saying types
+  store.rs      Validated SQLite catalog
+  ingest.rs     Cervantes Virtual and Wayback import adapters
+  refresh.rs    Background refresh policy
 
-data/seed.json    Small offline bootstrap catalog
-data/import-example.json  JSON format example
-npm/wrapper/      Cross-platform npm command (no postinstall HTTP downloads)
-npm/platform/     Template for native platform npm packages
-scripts/          Prepare platform packages from release binaries
-.github/workflows/ci.yml
+data/seed.json               Small offline starter catalog
+data/import-example.json     Local import format example
+npm/wrapper/                 Cross-platform npm launcher
+npm/platform/                Native platform package template
+scripts/                     Release package preparation
+.github/workflows/           CI and release workflows
 ```
 
-The **binary is native Rust**. npm provides only a Node launcher that selects a prebuilt package for the platform and forwards arguments/exit codes. The planned package matrix is `darwin-{arm64,x64}`, `linux-{arm64,x64}` (glibc), and `win32-{arm64,x64}`. Linux musl variants and additional hosts require separate handling in later releases.
+The executable is a native Rust binary. The npm package provides a Node.js
+launcher that selects the matching platform package and forwards arguments
+and exit codes. It does not download binaries during installation.
 
-## Distribution preparation
+The published native package targets are `darwin-arm64`, `darwin-x64`,
+`linux-arm64` and `linux-x64` (glibc), `win32-arm64`, and `win32-x64`. Linux
+musl is not currently supported.
 
-Build a native binary and stage its platform package locally:
+## Releases
 
-```sh
-cargo build --release --target aarch64-apple-darwin
-node scripts/prepare-npm.mjs aarch64-apple-darwin target/aarch64-apple-darwin/release/refranero 0.1.0
-cd npm/dist/darwin-arm64 && npm pack --dry-run
-```
+Release Please tracks Conventional Commits on `main`. After a release pull
+request is approved and merged, it creates a version tag and GitHub Release.
+The release workflow publishes the Rust crate to crates.io, the six native
+npm packages and npm wrapper with provenance, and multi-architecture images
+to Docker Hub and GHCR.
 
-The supported package targets are `x86_64-unknown-linux-gnu`, `aarch64-unknown-linux-gnu`, `x86_64-apple-darwin`, `aarch64-apple-darwin`, `x86_64-pc-windows-msvc`, and `aarch64-pc-windows-msvc`. The CI workflow builds these six targets with a platform matrix on native GitHub-hosted runners and runs package-generation tests.
+## Data provenance, legal boundaries, and attribution
 
-Before an npm release, build and test every native package, publish all six `@yacosta738/refranero-<platform>` packages first, then publish `@yacosta738/refranero`. Keep versions aligned across `Cargo.toml`, platform packages, and wrapper optional dependencies. The workflow does not publish packages automatically. npm credentials and package namespace access must be confirmed before adding a gated release workflow. Do not publish or advertise `@yacosta738/refranero` as available yet.
+- [CVC Refranero Multilingüe (Wayback snapshot, 2026-10-11)](https://web.archive.org/web/20261011222412/https://cvc.cervantes.es/lengua/refranero/)
+  is separate from the Biblioteca Virtual Miguel de Cervantes.
+- [Biblioteca Virtual Miguel de Cervantes — Refranes](https://www.cervantesvirtual.com/portales/refranes_dichos_proverbios_citas_adivinanzas/refran/)
+- [Biblioteca Virtual Miguel de Cervantes — Terms](https://www.cervantesvirtual.com/marco-legal/)
+- [Idiomingo — He that would learn to pray, let him go to sea](https://idiomingo.com/proverbs/he-that-would-learn-to-pray-let-him-go-to-sea)
+- [PCCD — Si vols a Déu pregar, fica't en la mar](https://pccd.dites.cat/p/Si_vols_a_D%C3%A9u_pregar%2C_fica%27t_en_la_mar)
+- [Wayback Machine availability API](https://archive.org/wayback/available)
 
-## Data provenance, legal boundaries and attribution
-
-- [CVC Refranero Multilingüe](https://cvc.cervantes.es/lengua/refranero/) — different project to the Biblioteca Virtual Miguel de Cervantes.
-- [Biblioteca Virtual Miguel de Cervantes — Refranes](https://www.cervantesvirtual.com/portales/refranes_dichos_proverbios_citas_adivinanzas/refran/).
-- [Biblioteca Virtual Miguel de Cervantes — Terms](https://www.cervantesvirtual.com/marco-legal/).
-- [Wayback Machine availability API](https://archive.org/wayback/available).
-
-The source code is MIT licensed; this does **not** extend a license to third-party page content or compilations. The Biblioteca Virtual Miguel de Cervantes's terms explicitly distinguish personal storage from redistributing their content and claim protection of their databases. Historical availability on archive.org does not remove original copyright or database rights. **Do not distribute a bulk harvested database with an npm package or a Git repository without the rightsholder's authorization.** Source references and a small common-tradition bootstrap are included instead. Users are responsible for permitted private imports.
+The source code is MIT licensed. That license does **not** cover third-party
+page content or compilations. The Biblioteca Virtual Miguel de Cervantes's
+terms distinguish personal storage from redistribution and claim protection
+of its databases. Historical availability on archive.org does not remove the
+original copyright or database rights. **Do not distribute a bulk-harvested
+database in an npm package or Git repository without the rightsholder's
+authorization.** Refranero includes source references and a small starter
+catalog of common sayings. Users are responsible for ensuring that their
+private imports comply with applicable terms.
