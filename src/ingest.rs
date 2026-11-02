@@ -4,7 +4,7 @@ use anyhow::{anyhow, bail, Context, Result};
 use reqwest::blocking::Client;
 use scraper::{Html, Selector};
 use serde::Deserialize;
-use std::collections::HashSet;
+use std::collections::{HashMap, HashSet};
 use std::io::Read;
 use std::sync::Once;
 use std::time::Duration;
@@ -47,6 +47,16 @@ pub fn http_client_with_timeout(timeout: Duration) -> Result<Client> {
 /// Download a text/html page with an upper body-size limit.
 fn fetch_html(client: &Client, url: &str) -> Result<String> {
     let response = client.get(url).send()?.error_for_status()?;
+    read_html_response(response)
+}
+
+fn fetch_wayback_html(client: &Client, replay_url: &str) -> Result<String> {
+    let response = client.get(replay_url).send()?.error_for_status()?;
+    validate_wayback_final_url(response.url())?;
+    read_html_response(response)
+}
+
+fn read_html_response(response: reqwest::blocking::Response) -> Result<String> {
     // Bound network reads rather than downloading an arbitrarily large response first.
     let mut bytes = Vec::new();
     response
@@ -187,6 +197,13 @@ fn validate_wayback_snapshot(snapshot: Option<Snapshot>) -> Result<Option<Waybac
     }))
 }
 
+fn validate_wayback_final_url(final_url: &Url) -> Result<()> {
+    if final_url.host_str() != Some("web.archive.org") {
+        bail!("Wayback replay redirected to an unexpected host");
+    }
+    Ok(())
+}
+
 fn find_wayback_capture(
     client: &Client,
     original_url: &Url,
@@ -211,7 +228,7 @@ fn fetch_wayback_ficha(
         return Ok(None);
     };
     let replay_url = capture.replay_url;
-    let html = fetch_html(client, replay_url.as_str())
+    let html = fetch_wayback_html(client, replay_url.as_str())
         .with_context(|| format!("retrieving {replay_url}"))?;
     Ok(Some(CapturedFicha {
         html,
@@ -256,8 +273,8 @@ fn parse_wayback_index(html: &str, timestamp: &str, limit: usize) -> Vec<NewSayi
     let doc = Html::parse_document(html);
     let links = Selector::parse("a[href]").expect("static CSS selector");
     let base = Url::parse(CVC_BASE).expect("static base URL");
-    let mut seen_pars = HashSet::new();
-    doc.select(&links)
+    let candidates = doc
+        .select(&links)
         .filter_map(|el| {
             let href = el.value().attr("href")?;
             if !href.to_ascii_lowercase().contains("ficha.aspx") {
@@ -276,24 +293,45 @@ fn parse_wayback_index(html: &str, timestamp: &str, limit: usize) -> Vec<NewSayi
             if text.is_empty() || text.chars().count() > 500 {
                 return None;
             }
+            let is_spanish = original
+                .query_pairs()
+                .find(|(key, _)| key.eq_ignore_ascii_case("Lng"))
+                .is_some_and(|(_, value)| value == "0");
             let canonical = original.to_string();
-            Some(NewSaying {
-                text,
-                category: "paremia".into(), // CVC listing contains different subtypes.
-                language: "es".into(),
-                source: "cvc_wayback".into(),
-                source_url: format!("https://web.archive.org/web/{timestamp}/{canonical}"),
-                original_url: Some(canonical),
-                captured_at: Some(timestamp.into()),
-                group_id: Some(format!("cvc:{par}")),
-            })
+            Some((
+                NewSaying {
+                    text,
+                    category: "paremia".into(), // CVC listing contains different subtypes.
+                    language: "es".into(),
+                    source: "cvc_wayback".into(),
+                    source_url: format!("https://web.archive.org/web/{timestamp}/{canonical}"),
+                    original_url: Some(canonical),
+                    captured_at: Some(timestamp.into()),
+                    group_id: Some(format!("cvc:{par}")),
+                },
+                is_spanish,
+            ))
         })
-        .filter(|entry| {
-            entry
-                .group_id
-                .as_deref()
-                .is_some_and(|group_id| seen_pars.insert(group_id.to_string()))
-        })
+        .collect::<Vec<_>>();
+
+    let mut seen_pars: HashMap<String, usize> = HashMap::new();
+    let mut roots: Vec<(NewSaying, bool)> = Vec::new();
+    for (entry, is_spanish) in candidates {
+        let group_id = entry.group_id.clone().unwrap_or_default();
+        if let Some(index) = seen_pars.get(&group_id).copied() {
+            if is_spanish && !roots[index].1 {
+                roots[index] = (entry, true);
+            }
+        } else {
+            seen_pars.insert(group_id, roots.len());
+            roots.push((entry, is_spanish));
+        }
+    }
+
+    // The index is Spanish. Keep the first valid anchor when a Par has no Lng=0 anchor.
+    roots
+        .into_iter()
+        .map(|(entry, _)| entry)
         .take(limit)
         .collect()
 }
@@ -334,6 +372,8 @@ pub struct WaybackImportReport {
     pub roots_processed: usize,
     pub variants_available: usize,
     pub variants_unavailable: usize,
+    /// Spanish `Par` IDs with a confirmed `Lng=0` capture in this import run.
+    pub captured_spanish_pars: HashSet<String>,
     pub warnings: Vec<WaybackImportWarning>,
 }
 
@@ -364,10 +404,15 @@ fn parse_wayback_language_links(html: &str, expected_par: &str) -> LanguageDisco
             if lng.is_empty() || !lng.chars().all(|character| character.is_ascii_digit()) {
                 return None;
             }
-            if !seen_lng.insert(lng.clone()) {
+            let Some(acronym_element) = element.select(&acronyms).next() else {
+                warnings.push(WaybackImportWarning {
+                    par: par.clone(),
+                    language: None,
+                    reason: format!("missing language acronym for Lng={lng}"),
+                });
                 return None;
-            }
-            let acronym = element.select(&acronyms).next()?.text().collect::<String>();
+            };
+            let acronym = acronym_element.text().collect::<String>();
             let Some(language) = language_code(&acronym) else {
                 warnings.push(WaybackImportWarning {
                     par: par.clone(),
@@ -376,6 +421,9 @@ fn parse_wayback_language_links(html: &str, expected_par: &str) -> LanguageDisco
                 });
                 return None;
             };
+            if !seen_lng.insert(lng) {
+                return None;
+            }
             Some(WaybackLanguageLink {
                 language: language.to_string(),
                 original_url,
@@ -514,6 +562,7 @@ where
         entries: Vec::with_capacity(roots_processed),
         variants_available: 0,
         variants_unavailable: 0,
+        captured_spanish_pars: HashSet::new(),
         warnings: Vec::new(),
     };
 
@@ -546,6 +595,7 @@ where
             Ok(Some(capture)) => {
                 update_spanish_provenance(&mut entry, &original_url, &capture);
                 report.variants_available += 1;
+                report.captured_spanish_pars.insert(par.clone());
 
                 let discovery = parse_wayback_language_links(&capture.html, &par);
                 report.warnings.extend(discovery.warnings);
@@ -715,6 +765,30 @@ mod tests {
     }
 
     #[test]
+    fn prefers_spanish_anchor_and_keeps_first_fallback_for_other_pars() {
+        let html = r#"
+            <a href="Ficha.aspx?Par=58807&amp;Lng=9">Wrong first language</a>
+            <a href="Ficha.aspx?Par=58122&amp;Lng=7">Fallback root entry</a>
+            <a href="Ficha.aspx?Par=58807&amp;Lng=0">Spanish root entry</a>
+        "#;
+        let entries = parse_wayback_index(html, "20240511091123", 2);
+
+        assert_eq!(entries.len(), 2);
+        assert_eq!(entries[0].group_id.as_deref(), Some("cvc:58807"));
+        assert_eq!(entries[0].text, "Spanish root entry");
+        assert!(entries[0]
+            .original_url
+            .as_deref()
+            .is_some_and(|url| url.contains("Lng=0")));
+        assert_eq!(entries[1].group_id.as_deref(), Some("cvc:58122"));
+        assert_eq!(entries[1].text, "Fallback root entry");
+        assert!(entries[1]
+            .original_url
+            .as_deref()
+            .is_some_and(|url| url.contains("Lng=7")));
+    }
+
+    #[test]
     fn parses_validated_wayback_language_links() {
         let html = r#"
             <div id="idiomas">
@@ -756,6 +830,43 @@ mod tests {
         assert_eq!(lngs, vec!["9", "10", "3"]);
         assert_eq!(discovery.warnings.len(), 1);
         assert!(discovery.warnings[0].reason.contains("ZZ"));
+    }
+
+    #[test]
+    fn invalid_acronym_does_not_consume_lng() {
+        let html = r#"
+            <div id="idiomas">
+              <a href="Ficha.aspx?Par=58807&amp;Lng=9"><acronym>ZZ</acronym></a>
+              <a href="Ficha.aspx?Par=58807&amp;Lng=9"><acronym>EN</acronym></a>
+            </div>
+        "#;
+
+        let discovery = parse_wayback_language_links(html, "58807");
+
+        assert_eq!(discovery.links.len(), 1);
+        assert_eq!(discovery.links[0].language, "en");
+        assert_eq!(discovery.warnings.len(), 1);
+        assert!(discovery.warnings[0].reason.contains("ZZ"));
+    }
+
+    #[test]
+    fn warns_when_language_link_has_no_acronym() {
+        let html = r#"
+            <div id="idiomas">
+              <a href="Ficha.aspx?Par=58807&amp;Lng=15">Idioma sin código</a>
+            </div>
+        "#;
+
+        let discovery = parse_wayback_language_links(html, "58807");
+
+        assert!(discovery.links.is_empty());
+        assert_eq!(discovery.warnings.len(), 1);
+        assert_eq!(discovery.warnings[0].par, "58807");
+        assert_eq!(discovery.warnings[0].language, None);
+        assert!(discovery.warnings[0]
+            .reason
+            .contains("missing language acronym"));
+        assert!(discovery.warnings[0].reason.contains("Lng=15"));
     }
 
     #[test]
@@ -929,6 +1040,18 @@ mod tests {
     }
 
     #[test]
+    fn validates_final_replay_host_after_redirects() {
+        let same_host = Url::parse(
+            "https://web.archive.org/web/20240511091123/https://cvc.cervantes.es/ficha.aspx",
+        )
+        .unwrap();
+        let external = Url::parse("https://evil.example/ficha.aspx").unwrap();
+
+        assert!(validate_wayback_final_url(&same_host).is_ok());
+        assert!(validate_wayback_final_url(&external).is_err());
+    }
+
+    #[test]
     fn collects_available_ficha_captures_per_language() {
         let index = r#"<a href="Ficha.aspx?Par=58807&amp;Lng=0">Haz bien y no mires a quién</a>"#;
         let roots = parse_wayback_index(index, "20240511091123", 1);
@@ -972,6 +1095,7 @@ mod tests {
         assert_eq!(report.roots_processed, 1);
         assert_eq!(report.variants_available, 2);
         assert_eq!(report.variants_unavailable, 1);
+        assert!(report.captured_spanish_pars.contains("58807"));
         assert_eq!(report.entries.len(), 2);
         assert_eq!(report.entries[0].language, "es");
         assert_eq!(

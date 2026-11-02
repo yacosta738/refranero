@@ -2,6 +2,7 @@
 use crate::domain::{NewSaying, Saying};
 use anyhow::{bail, Context, Result};
 use rusqlite::{params, Connection, OptionalExtension, TransactionBehavior};
+use std::collections::HashSet;
 use std::path::Path;
 
 // Increment when a later release changes the bundled source-link mappings.
@@ -274,6 +275,23 @@ impl Store {
 
     /// Insert only unseen tuples. Returns the number of new rows.
     pub fn insert(&self, entries: &[NewSaying]) -> Result<usize> {
+        self.insert_with_capture_updates(entries, &HashSet::new())
+    }
+
+    /// Insert Wayback records and refresh only Spanish roots with confirmed captures.
+    pub fn insert_wayback(
+        &self,
+        entries: &[NewSaying],
+        captured_spanish_pars: &HashSet<String>,
+    ) -> Result<usize> {
+        self.insert_with_capture_updates(entries, captured_spanish_pars)
+    }
+
+    fn insert_with_capture_updates(
+        &self,
+        entries: &[NewSaying],
+        captured_spanish_pars: &HashSet<String>,
+    ) -> Result<usize> {
         // A local import file must not be able to inject file:// or javascript: links.
         for entry in entries {
             if !matches!(
@@ -304,16 +322,33 @@ impl Store {
             }
         }
         let mut created = 0;
-        let mut stmt = self.connection.prepare_cached(
+        let mut insert_ignored = self.connection.prepare_cached(
             "INSERT OR IGNORE INTO sayings
              (text, category, language, source, source_url, original_url, captured_at, group_id)
              VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8)",
+        )?;
+        let mut upsert_captured = self.connection.prepare_cached(
+            "INSERT INTO sayings
+             (text, category, language, source, source_url, original_url, captured_at, group_id)
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8)
+             ON CONFLICT(text, category, language, source) DO UPDATE SET
+               source_url = excluded.source_url,
+               original_url = excluded.original_url,
+               captured_at = excluded.captured_at
+             WHERE sayings.group_id = excluded.group_id",
         )?;
         for e in entries {
             if e.text.trim().is_empty() || e.text.chars().count() > 3000 {
                 continue;
             }
-            created += stmt.execute(params![
+            let captured_spanish_par = e
+                .group_id
+                .as_deref()
+                .and_then(|group_id| group_id.strip_prefix("cvc:"));
+            let update_captured_ficha = e.source == "cvc_wayback"
+                && e.language == "es"
+                && captured_spanish_par.is_some_and(|par| captured_spanish_pars.contains(par));
+            let params = params![
                 e.text,
                 e.category,
                 e.language,
@@ -322,7 +357,23 @@ impl Store {
                 e.original_url,
                 e.captured_at,
                 e.group_id
-            ])?;
+            ];
+            if update_captured_ficha {
+                let existed: bool = self.connection.query_row(
+                    "SELECT EXISTS(
+                       SELECT 1 FROM sayings
+                       WHERE text = ?1 AND category = ?2 AND language = ?3 AND source = ?4
+                     )",
+                    params![e.text, e.category, e.language, e.source],
+                    |row| row.get(0),
+                )?;
+                let changed = upsert_captured.execute(params)?;
+                if !existed {
+                    created += changed;
+                }
+            } else {
+                created += insert_ignored.execute(params)?;
+            }
         }
         Ok(created)
     }
@@ -703,5 +754,56 @@ mod tests {
         let seeds: Vec<NewSaying> =
             serde_json::from_str(include_str!("../data/seed.json")).unwrap();
         assert_eq!(conn.insert(&seeds).unwrap(), 0);
+    }
+
+    #[test]
+    fn captured_spanish_ficha_updates_existing_index_provenance_only_when_marked() {
+        let store = Store::open(Path::new(":memory:")).unwrap();
+        let fallback = NewSaying {
+            text: "Haz bien y no mires a quién".into(),
+            category: "paremia".into(),
+            language: "es".into(),
+            source: "cvc_wayback".into(),
+            source_url: "https://web.archive.org/web/20240511091123/https://cvc.cervantes.es/lengua/refranero/ficha.aspx?Par=58807&Lng=0".into(),
+            original_url: Some(
+                "https://cvc.cervantes.es/lengua/refranero/ficha.aspx?Par=58807&Lng=0".into(),
+            ),
+            captured_at: Some("20240511091123".into()),
+            group_id: Some("cvc:58807".into()),
+        };
+        assert_eq!(store.insert(std::slice::from_ref(&fallback)).unwrap(), 1);
+
+        let captured = NewSaying {
+            source_url: "https://web.archive.org/web/20240512091123/https://cvc.cervantes.es/lengua/refranero/ficha.aspx?Par=58807&Lng=0".into(),
+            captured_at: Some("20240512091123".into()),
+            ..fallback.clone()
+        };
+        let captured_pars = std::collections::HashSet::from(["58807".to_string()]);
+        assert_eq!(
+            store.insert_wayback(&[captured], &captured_pars).unwrap(),
+            0
+        );
+
+        let later_fallback = NewSaying {
+            source_url: "https://web.archive.org/web/20240513091123/https://cvc.cervantes.es/lengua/refranero/ficha.aspx?Par=58807&Lng=0".into(),
+            captured_at: Some("20240513091123".into()),
+            ..fallback
+        };
+        store
+            .insert_wayback(&[later_fallback], &std::collections::HashSet::new())
+            .unwrap();
+
+        let stored: (String, Option<String>) = store
+            .connection
+            .query_row(
+                "SELECT source_url, captured_at FROM sayings WHERE text = ?1 AND source = 'cvc_wayback' AND language = 'es'",
+                ["Haz bien y no mires a quién"],
+                |row| Ok((row.get(0)?, row.get(1)?)),
+            )
+            .unwrap();
+        assert!(stored
+            .0
+            .starts_with("https://web.archive.org/web/20240512091123/"));
+        assert_eq!(stored.1.as_deref(), Some("20240512091123"));
     }
 }
