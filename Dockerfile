@@ -19,7 +19,13 @@ RUN cargo build --release --locked \
 # ---- Runtime stage ----------------------------------------------------------
 FROM debian:bookworm-slim AS runtime
 
-RUN groupadd --system refranero \
+# reqwest 0.13 verifies TLS with the platform verifier, so the runtime image
+# needs a system trust store instead of the root certificates that reqwest
+# 0.12 used to bundle.
+RUN apt-get update \
+    && apt-get install -y --no-install-recommends ca-certificates \
+    && rm -rf /var/lib/apt/lists/* \
+    && groupadd --system refranero \
     && useradd --system --gid refranero --create-home --home-dir /home/refranero refranero \
     && mkdir -p /home/refranero/.local/share/refranero \
     && chown -R refranero:refranero /home/refranero

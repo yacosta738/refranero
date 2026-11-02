@@ -23,7 +23,7 @@ Release Please tracks Conventional Commits on `main` and opens or updates a rele
 
 ## Quick start
 
-Rust toolchain (1.85+) is required to build from source:
+Rust toolchain (1.89+) is required to build from source:
 
 ```sh
 cargo run --
