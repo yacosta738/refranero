@@ -145,7 +145,8 @@ refranero --browser --count 3
 ```
 
 Use `open` to open a particular local entry by ID. With no ID, `open` selects
-a random Spanish refrán and opens its source URL.
+a random entry and opens its source URL. The default is a Spanish refrán;
+`--lang` and `--category` can change the selection.
 
 ```sh
 refranero open 12
@@ -184,6 +185,18 @@ The automatic refresh updates the current Cervantes Virtual snapshot. It does
 not replace entries imported from the historical CVC/Wayback source. Refresh
 output is appended to a `catalog.refresh.log` file next to the SQLite
 database.
+
+Current-portal entries use the per-entry reference in the page's `blockquote`
+`cite` attribute. Refranero validates the host and upgrades HTTP references to
+HTTPS. If a page has no safe `cite` value, Refranero falls back to the category
+page. The category URL used during import is retained in `original_url`.
+
+When upgrading an existing catalog, Refranero migrates links in the bundled
+starter records and marks the current-portal snapshot as stale. Run
+`refranero sync virtual --limit 50` once to replace that snapshot immediately
+using the same per-page limit as automatic refresh. This replaces prior
+`cervantes_virtual` entries but leaves CVC/Wayback records untouched. Otherwise,
+the next online random read schedules the refresh in the background.
 
 Only the random command schedules this automatic refresh. `open`, `stats`,
 and `import` do not schedule it. An explicit `sync` command makes its own
@@ -225,20 +238,24 @@ page type.
 
 ### Import a historical CVC index through the Wayback Machine
 
-`sync wayback` looks up an archived alphabetical index and imports linked
-Spanish paremia entries. The defaults are letter `A`, year `2020`, and limit
-`20`. The letter must be one ASCII letter. The year must be from 1996 through
-2100, and the limit must be from 1 through 50.
+`sync wayback` looks up an archived alphabetical index, imports its Spanish
+paremia entries, and follows each archived ficha's language links. For each
+linked language with an available HTTP 200 capture, it imports only the primary
+`Enunciado` text, not the full ficha. The defaults are letter `A`, year `2020`,
+and limit `20`. The letter must be one ASCII letter. The year must be from 1996
+through 2100, and the limit must be from 1 through 50.
 
 ```sh
 refranero sync wayback --letter A --year 2020 --limit 20
 refranero --category paremia
 ```
 
-This import stores links found in the alphabetical index. It does not
-download and parse the full historical ficha for every entry. It does not
-create translations. A Wayback availability result does not guarantee that
-each linked page was archived.
+`--limit` counts unique Spanish root fichas (`Par` IDs), not the total number of
+language records. Each language can have its own capture timestamp. A missing
+capture is skipped. A transient request or parse failure produces a warning;
+the command keeps records it retrieved successfully. Repeating the command is
+safe because imports are idempotent. If the Spanish ficha is unavailable, the
+Spanish index entry is kept, but the command cannot discover its language links.
 
 `--offline` disables the automatic background refresh for random reads. It
 does not turn an explicit `sync` command into an offline operation. `sync`
@@ -270,8 +287,9 @@ always requests remote pages.
   is 10,000 records per file.
 - `sync virtual`: import current Cervantes Virtual entries. The default is all
   five pages and 20 entries per page.
-- `sync wayback`: import links from a historical CVC alphabetical index. The
-  defaults are letter `A`, year `2020`, and limit `20`.
+- `sync wayback`: import Spanish root entries and available language variants
+  from a historical CVC alphabetical index. `--limit` counts unique Spanish
+  root fichas. The defaults are letter `A`, year `2020`, and limit `20`.
 
 ### General options
 
@@ -285,18 +303,31 @@ For all parser-level details, run `refranero --help` or `refranero sync --help`.
 
 - The starter catalog contains 16 entries: 14 Spanish, one English, and one
   Catalan. Other languages depend on imported local data.
+- Three Spanish starter entries from the retired CVC Refranero use verified
+  Wayback snapshots. The English and Catalan starter entries use active
+  references from Idiomingo and PCCD. Their retired CVC URLs remain in
+  `original_url` as provenance. The source label identifies the original
+  collection; `source_url` is the link opened by the browser. The original CVC
+  pages may return 404 because that site has been retired.
 - Current Cervantes Virtual imports extract saying text from page blockquotes
-  and link to the category page. The importer does not claim that each entry's
-  exact bibliographic page, meaning, or riddle answer has been verified.
+  and use each blockquote's validated `cite` reference. They fall back to the
+  category page only when the page does not provide a safe reference. The
+  citation can open the source work or author portal instead of a standalone
+  entry page. The CLI prints the refrán before the browser opens the reference.
 - Historical CVC index entries are classified as `paremia` because the index
   includes different subtypes. Historical imports do not extract full ficha
-  content or translations.
-- Imports are limited to 50 entries per page or letter. Refranero is not a
-  bulk-crawling tool. Respect each site's robots rules, rate limits, and terms.
+  content; linked language variants contribute only their primary `Enunciado`
+  text.
+- `sync virtual` is limited to 50 entries per selected page. `sync wayback` is
+  limited to 50 unique Spanish root fichas per letter. Each root can add linked
+  language variants, so saved records can exceed `--limit`; this limit counts
+  root fichas, not network requests. Refranero is not a bulk-crawling tool.
+  Respect each site's robots rules, rate limits, and terms.
 - Refranero does not deduplicate across different sources because that could
   remove provenance.
-- Online imports depend on external sites and their page structures. Some CVC
-  URLs may be unavailable during site maintenance.
+- Online imports depend on external sites and their page structures. The old
+  CVC Refranero pages are no longer available live; the starter catalog uses
+  verified Wayback captures or active reference pages instead.
 
 ## Architecture
 
@@ -334,10 +365,12 @@ to Docker Hub and GHCR.
 
 ## Data provenance, legal boundaries, and attribution
 
-- [CVC Refranero Multilingüe](https://cvc.cervantes.es/lengua/refranero/)
+- [CVC Refranero Multilingüe (Wayback snapshot, 2026-10-11)](https://web.archive.org/web/20261011222412/https://cvc.cervantes.es/lengua/refranero/)
   is separate from the Biblioteca Virtual Miguel de Cervantes.
 - [Biblioteca Virtual Miguel de Cervantes — Refranes](https://www.cervantesvirtual.com/portales/refranes_dichos_proverbios_citas_adivinanzas/refran/)
 - [Biblioteca Virtual Miguel de Cervantes — Terms](https://www.cervantesvirtual.com/marco-legal/)
+- [Idiomingo — He that would learn to pray, let him go to sea](https://idiomingo.com/proverbs/he-that-would-learn-to-pray-let-him-go-to-sea)
+- [PCCD — Si vols a Déu pregar, fica't en la mar](https://pccd.dites.cat/p/Si_vols_a_D%C3%A9u_pregar%2C_fica%27t_en_la_mar)
 - [Wayback Machine availability API](https://archive.org/wayback/available)
 
 The source code is MIT licensed. That license does **not** cover third-party
