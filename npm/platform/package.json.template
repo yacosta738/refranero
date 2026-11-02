@@ -2,6 +2,10 @@
   "name": "@yacosta738/refranero-__OS__-__CPU__",
   "version": "__VERSION__",
   "description": "Native refranero executable for __OS__ __CPU__",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/yacosta738/refranero.git"
+  },
   "license": "MIT",
   "os": ["__OS__"],
   "cpu": ["__CPU__"],

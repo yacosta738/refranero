@@ -2,12 +2,14 @@
 # Configura los secretos de la GitHub App para el workflow de Release Please.
 #
 # Uso:
-#   scripts/setup-release-app-secrets.sh <ruta-a-clave-privada.pem>
+#   scripts/setup-release-app-secrets.sh <ruta-a-clave-privada.pem> <client-id>
 #
 # Requisitos:
 #   - gh CLI autenticado con acceso de administracion al repositorio.
-#   - La App (por ejemplo VersionaryBot) instalada en el repositorio destino.
-#   - APP_CLIENT_ID exportado o pasado como segundo argumento.
+#   - La App instalada en el repositorio destino con permisos de Contents,
+#     Issues y Pull requests (read/write).
+#   - El Client ID de la App (Iv1...) pasado como segundo argumento
+#     o en la variable APP_CLIENT_ID.
 #
 # La clave privada se lee del archivo local y viaja por stdin hacia `gh secret set`.
 # Nunca se imprime en pantalla ni se guarda en el historial del shell.
@@ -30,7 +32,7 @@ fi
 
 if [[ -z "$CLIENT_ID" ]]; then
   echo "Falta el Client ID de la GitHub App (Iv1...)." >&2
-  echo "Genera uno en: https://github.com/settings/apps/<tu-app>/settings" >&2
+  echo "Genera uno en la configuración de la GitHub App." >&2
   exit 1
 fi
 
