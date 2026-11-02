@@ -1,5 +1,18 @@
 # Changelog
 
+## [0.4.0](https://github.com/yacosta738/refranero/compare/v0.3.2...v0.4.0) (2026-11-02)
+
+
+### Features
+
+* **wayback:** import multilingual archived fichas ([#29](https://github.com/yacosta738/refranero/issues/29)) ([e4c8554](https://github.com/yacosta738/refranero/commit/e4c8554bdaa6dba4eefa7bce14e18465684db59e))
+
+
+### Bug Fixes
+
+* **source-links:** reparar enlaces de origen de los refranes ([#27](https://github.com/yacosta738/refranero/issues/27)) ([d42d151](https://github.com/yacosta738/refranero/commit/d42d151211fa34dd0df958a86cdf2683eb494e03))
+* **wayback:** address multilingual import review findings ([#30](https://github.com/yacosta738/refranero/issues/30)) ([a076a13](https://github.com/yacosta738/refranero/commit/a076a13c59909e9ff178c834405269bd9a496639))
+
 ## [0.3.2](https://github.com/yacosta738/refranero/compare/v0.3.1...v0.3.2) (2026-11-02)
 
 
