@@ -238,20 +238,24 @@ page type.
 
 ### Import a historical CVC index through the Wayback Machine
 
-`sync wayback` looks up an archived alphabetical index and imports linked
-Spanish paremia entries. The defaults are letter `A`, year `2020`, and limit
-`20`. The letter must be one ASCII letter. The year must be from 1996 through
-2100, and the limit must be from 1 through 50.
+`sync wayback` looks up an archived alphabetical index, imports its Spanish
+paremia entries, and follows each archived ficha's language links. It imports
+every linked language with an available HTTP 200 capture. The defaults are
+letter `A`, year `2020`, and limit `20`. The letter must be one ASCII letter.
+The year must be from 1996 through 2100, and the limit must be from 1 through
+50.
 
 ```sh
 refranero sync wayback --letter A --year 2020 --limit 20
 refranero --category paremia
 ```
 
-This import stores links found in the alphabetical index. It does not
-download and parse the full historical ficha for every entry. It does not
-create translations. A Wayback availability result does not guarantee that
-each linked page was archived.
+`--limit` counts unique Spanish root fichas (`Par` IDs), not the total number of
+language records. Each language can have its own capture timestamp. A missing
+capture is skipped. A transient request or parse failure produces a warning;
+the command keeps records it retrieved successfully. Repeating the command is
+safe because imports are idempotent. If the Spanish ficha is unavailable, the
+Spanish index entry is kept, but the command cannot discover its language links.
 
 `--offline` disables the automatic background refresh for random reads. It
 does not turn an explicit `sync` command into an offline operation. `sync`
