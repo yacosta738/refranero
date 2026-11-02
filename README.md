@@ -1,5 +1,18 @@
 # Refranero (Rust CLI)
 
+[![crates.io](https://img.shields.io/crates/v/refranero-cli?style=flat-square&label=crates.io)](https://crates.io/crates/refranero-cli)
+[![npm](https://img.shields.io/npm/v/@yacosta738/refranero?style=flat-square&label=npm)](https://www.npmjs.com/package/@yacosta738/refranero)
+[![Docker Hub](https://img.shields.io/docker/v/yacosta738/refranero?sort=semver&style=flat-square&label=docker)](https://hub.docker.com/r/yacosta738/refranero/tags)
+[![release](https://img.shields.io/github/v/release/yacosta738/refranero?style=flat-square&label=release)](https://github.com/yacosta738/refranero/releases/latest)
+[![ci](https://img.shields.io/github/actions/workflow/status/yacosta738/refranero/ci.yml?branch=main&style=flat-square&label=ci)](https://github.com/yacosta738/refranero/actions/workflows/ci.yml)
+[![license](https://img.shields.io/github/license/yacosta738/refranero?style=flat-square&label=license)](./LICENSE)
+
+[![Rust](https://img.shields.io/badge/rust-1.85%2B-000?logo=rust&style=for-the-badge)](https://www.rust-lang.org)
+[![Node.js](https://img.shields.io/badge/node-%3E%3D18-000?logo=node.js&style=for-the-badge)](https://nodejs.org)
+[![SQLite](https://img.shields.io/badge/sqlite-bundled-000?logo=sqlite&style=for-the-badge)](https://www.sqlite.org)
+[![Docker](https://img.shields.io/badge/docker-000?logo=docker&style=for-the-badge)](./Dockerfile)
+[![GitHub Actions](https://img.shields.io/badge/release-GitHub%20Actions-000?logo=githubactions&style=for-the-badge)](./.github/workflows/release.yml)
+
 Offline-first Rust command-line reader for traditional Spanish sayings, with optional imports from the **Biblioteca Virtual Miguel de Cervantes** and the historical **Centro Virtual Cervantes** via the **Wayback Machine**.
 
 > **Status: prototype, not yet published to npm.** The runtime has local test coverage and the current-portal import has been exercised against the live site. Online import still depends on external websites' availability and HTML structures.
