@@ -13,6 +13,7 @@
 [![Docker](https://img.shields.io/badge/docker-000?logo=docker&style=for-the-badge)](./Dockerfile)
 [![GitHub Actions](https://img.shields.io/badge/release-GitHub%20Actions-000?logo=githubactions&style=for-the-badge)](./.github/workflows/release.yml)
 
+![refranero.png](assets/refranero.png)
 Offline-first Rust command-line reader for traditional Spanish sayings, with optional imports from the **Biblioteca Virtual Miguel de Cervantes** and the historical **Centro Virtual Cervantes** via the **Wayback Machine**.
 
 > **Status: prototype, not yet published to npm.** The runtime has local test coverage and the current-portal import has been exercised against the live site. Online import still depends on external websites' availability and HTML structures.
