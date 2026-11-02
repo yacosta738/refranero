@@ -1,6 +1,6 @@
 {
   "name": "@yacosta738/refranero",
-  "version": "0.3.2",
+  "version": "0.4.0",
   "description": "A Rust CLI for traditional proverbs and Cervantes sources",
   "repository": {
     "type": "git",
@@ -21,11 +21,11 @@
   },
   "license": "MIT",
   "optionalDependencies": {
-    "@yacosta738/refranero-darwin-arm64": "0.3.2",
-    "@yacosta738/refranero-darwin-x64": "0.3.2",
-    "@yacosta738/refranero-linux-arm64": "0.3.2",
-    "@yacosta738/refranero-linux-x64": "0.3.2",
-    "@yacosta738/refranero-win32-arm64": "0.3.2",
-    "@yacosta738/refranero-win32-x64": "0.3.2"
+    "@yacosta738/refranero-darwin-arm64": "0.4.0",
+    "@yacosta738/refranero-darwin-x64": "0.4.0",
+    "@yacosta738/refranero-linux-arm64": "0.4.0",
+    "@yacosta738/refranero-linux-x64": "0.4.0",
+    "@yacosta738/refranero-win32-arm64": "0.4.0",
+    "@yacosta738/refranero-win32-x64": "0.4.0"
   }
 }
