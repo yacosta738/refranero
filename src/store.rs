@@ -587,7 +587,7 @@ mod tests {
             store
                 .connection
                 .execute(
-                    "UPDATE sayings SET source_url = ?1 WHERE group_id = 'cvc:58807'",
+                    "UPDATE sayings SET source_url = ?1, captured_at = NULL WHERE group_id = 'cvc:58807'",
                     [old_cvc_url],
                 )
                 .unwrap();
@@ -637,6 +637,10 @@ mod tests {
             .entry
             .source_url
             .starts_with("https://web.archive.org/web/20240511091123/"));
+        assert_eq!(
+            legacy_cvc.entry.captured_at.as_deref(),
+            Some("20240511091123")
+        );
         assert_eq!(
             legacy_portal.entry.source_url,
             "https://www.cervantesvirtual.com/obra-visor/refranes-alusivos-al-tiempo/html/"
