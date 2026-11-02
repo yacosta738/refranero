@@ -355,6 +355,32 @@ The published native package targets are `darwin-arm64`, `darwin-x64`,
 `linux-arm64` and `linux-x64` (glibc), `win32-arm64`, and `win32-x64`. Linux
 musl is not currently supported.
 
+## Set up the AI agent instructions
+
+The repository guidance for coding agents lives in
+[`.agents/AGENTS.md`](.agents/AGENTS.md). Agent tools look for that guidance
+under different names, so this repository uses
+[AgentSync](https://github.com/dallay/agentsync) to generate the expected
+entry points as symlinks. The root `AGENTS.md` is one of those generated
+links, and it is not tracked in Git.
+
+Run AgentSync once after a fresh clone to create the links:
+
+```sh
+npx --yes @dallay/agentsync@latest apply
+```
+
+The command creates the root `AGENTS.md` symlink and the equivalent links for
+the other supported tools. It also refreshes the managed block of `.gitignore`
+so the generated links stay untracked. Verify the result with:
+
+```sh
+npx --yes @dallay/agentsync@latest status
+```
+
+A successful run reports `Status: All good`. When AgentSync is already
+installed globally, use `agentsync apply` and `agentsync status` instead.
+
 ## Releases
 
 Release Please tracks Conventional Commits on `main`. After a release pull
