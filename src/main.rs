@@ -367,7 +367,7 @@ fn sync(source: &SyncSource, store: &mut Store) -> Result<()> {
                     warning.reason
                 );
             }
-            inserted = store.insert(&report.entries)?;
+            inserted = store.insert_wayback(&report.entries, &report.captured_spanish_pars)?;
         }
     }
     println!(

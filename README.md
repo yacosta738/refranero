@@ -239,11 +239,11 @@ page type.
 ### Import a historical CVC index through the Wayback Machine
 
 `sync wayback` looks up an archived alphabetical index, imports its Spanish
-paremia entries, and follows each archived ficha's language links. It imports
-every linked language with an available HTTP 200 capture. The defaults are
-letter `A`, year `2020`, and limit `20`. The letter must be one ASCII letter.
-The year must be from 1996 through 2100, and the limit must be from 1 through
-50.
+paremia entries, and follows each archived ficha's language links. For each
+linked language with an available HTTP 200 capture, it imports only the primary
+`Enunciado` text, not the full ficha. The defaults are letter `A`, year `2020`,
+and limit `20`. The letter must be one ASCII letter. The year must be from 1996
+through 2100, and the limit must be from 1 through 50.
 
 ```sh
 refranero sync wayback --letter A --year 2020 --limit 20
@@ -287,8 +287,9 @@ always requests remote pages.
   is 10,000 records per file.
 - `sync virtual`: import current Cervantes Virtual entries. The default is all
   five pages and 20 entries per page.
-- `sync wayback`: import links from a historical CVC alphabetical index. The
-  defaults are letter `A`, year `2020`, and limit `20`.
+- `sync wayback`: import Spanish root entries and available language variants
+  from a historical CVC alphabetical index. `--limit` counts unique Spanish
+  root fichas. The defaults are letter `A`, year `2020`, and limit `20`.
 
 ### General options
 
@@ -315,9 +316,13 @@ For all parser-level details, run `refranero --help` or `refranero sync --help`.
   entry page. The CLI prints the refrán before the browser opens the reference.
 - Historical CVC index entries are classified as `paremia` because the index
   includes different subtypes. Historical imports do not extract full ficha
-  content or translations.
-- Imports are limited to 50 entries per page or letter. Refranero is not a
-  bulk-crawling tool. Respect each site's robots rules, rate limits, and terms.
+  content; linked language variants contribute only their primary `Enunciado`
+  text.
+- `sync virtual` is limited to 50 entries per selected page. `sync wayback` is
+  limited to 50 unique Spanish root fichas per letter. Each root can add linked
+  language variants, so saved records can exceed `--limit`; this limit counts
+  root fichas, not network requests. Refranero is not a bulk-crawling tool.
+  Respect each site's robots rules, rate limits, and terms.
 - Refranero does not deduplicate across different sources because that could
   remove provenance.
 - Online imports depend on external sites and their page structures. The old
