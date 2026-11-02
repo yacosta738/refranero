@@ -81,7 +81,7 @@ enum SyncSource {
         #[arg(long, default_value_t = 20)]
         limit: usize,
     },
-    /// Import a historical CVC alphabetic index via Wayback Machine.
+    /// Import an archived CVC index and its available language fichas via Wayback Machine.
     Wayback {
         /// First letter of the index (A-Z).
         #[arg(long, default_value_t = 'A')]
@@ -89,7 +89,7 @@ enum SyncSource {
         /// Approximate year of the archival capture.
         #[arg(long, default_value_t = 2020)]
         year: u16,
-        /// Maximum number of paremia links (1-50).
+        /// Maximum number of unique Spanish root fichas (1-50).
         #[arg(long, default_value_t = 20)]
         limit: usize,
     },
@@ -348,12 +348,26 @@ fn sync(source: &SyncSource, store: &mut Store) -> Result<()> {
             limit,
         } => {
             validate_import_limit(limit)?;
-            let entries = ingest::import_wayback(&client, letter, year, limit)?;
-            if entries.is_empty() {
+            let report = ingest::import_wayback(&client, letter, year, limit)?;
+            if report.entries.is_empty() {
                 bail!("no CVC fichas discovered in archived index; inspect the snapshot markup");
             }
-            println!("Wayback: {} historical index links", entries.len());
-            inserted = store.insert(&entries)?;
+            println!(
+                "Wayback: {} root fichas processed; {} captures available; {} captures unavailable; {} partial failures.",
+                report.roots_processed,
+                report.variants_available,
+                report.variants_unavailable,
+                report.warnings.len()
+            );
+            for warning in &report.warnings {
+                eprintln!(
+                    "Warning: Wayback Par={} language={}: {}",
+                    warning.par,
+                    warning.language.as_deref().unwrap_or("unknown"),
+                    warning.reason
+                );
+            }
+            inserted = store.insert(&report.entries)?;
         }
     }
     println!(
