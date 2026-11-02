@@ -2,6 +2,10 @@
   "name": "@yacosta738/refranero",
   "version": "0.3.1",
   "description": "A Rust CLI for traditional proverbs and Cervantes sources",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/yacosta738/refranero.git"
+  },
   "type": "module",
   "bin": {
     "refranero": "./bin/refranero.mjs"

@@ -25,26 +25,30 @@ jobs:
       version: ${{ steps.release.outputs.version }}
       tag_name: ${{ steps.release.outputs.tag_name }}
     steps:
-      # NOTE: using GITHUB_TOKEN instead of a GitHub App installation token.
-      # Trade-off: PRs/pushes made with GITHUB_TOKEN do not trigger other
-      # workflow runs (GitHub restriction). The release PR opened below will
-      # need its required status checks triggered manually (re-run, or an
-      # empty commit) before it can satisfy the `main` ruleset and be merged.
-      # Requirement: creating the release pull request with GITHUB_TOKEN also
-      # needs "Allow GitHub Actions to create and approve pull requests"
-      # enabled in repository (or organization) Settings > Actions > General.
+      - name: Create GitHub App token
+        id: app-token
+        uses: actions/create-github-app-token@64ab729a6294000f5aa4a4bc0b73d1f32bc45510 # v3.3.0
+        with:
+          client-id: ${{ secrets.APP_CLIENT_ID }}
+          private-key: ${{ secrets.APP_PRIVATE_KEY }}
+          owner: ${{ github.repository_owner }}
+          repositories: ${{ github.event.repository.name }}
+          permission-contents: write
+          permission-issues: write
+          permission-pull-requests: write
+
       - name: Checkout repository
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
         with:
           fetch-depth: 0
           persist-credentials: false
-          token: ${{ secrets.GITHUB_TOKEN }}
+          token: ${{ steps.app-token.outputs.token }}
 
       - name: Run Release Please
         id: release
         uses: googleapis/release-please-action@45996ed1f6d02564a971a2fa1b5860e934307cf7 # v5.0.0
         with:
-          token: ${{ secrets.GITHUB_TOKEN }}
+          token: ${{ steps.app-token.outputs.token }}
           config-file: release-please-config.json
           manifest-file: .release-please-manifest.json
           target-branch: main
@@ -73,6 +77,9 @@ jobs:
     name: Publish npm packages
     needs: release-please
     if: needs.release-please.outputs.release_created == 'true'
+    permissions:
+      contents: read
+      id-token: write
     strategy:
       fail-fast: false
       matrix:
@@ -96,8 +103,6 @@ jobs:
             os: windows-11-arm
             package: win32-arm64
     runs-on: ${{ matrix.os }}
-    permissions:
-      contents: read
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
         with:
@@ -110,6 +115,7 @@ jobs:
         with:
           node-version: '26'
           registry-url: 'https://registry.npmjs.org'
+          package-manager-cache: false
       - name: Build native target
         run: cargo build --release --target ${{ matrix.target }}
       - name: Prepare platform package (Unix)
@@ -119,7 +125,7 @@ jobs:
         if: runner.os == 'Windows'
         run: node scripts/prepare-npm.mjs ${{ matrix.target }} target/${{ matrix.target }}/release/refranero.exe ${{ needs.release-please.outputs.version }}
       - name: Publish platform package
-        run: npm publish --access public
+        run: npm publish --provenance --access public
         working-directory: npm/dist/${{ matrix.package }}
         env:
           NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
@@ -131,6 +137,7 @@ jobs:
     runs-on: ubuntu-latest
     permissions:
       contents: read
+      id-token: write
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
         with:
@@ -139,8 +146,9 @@ jobs:
         with:
           node-version: '26'
           registry-url: 'https://registry.npmjs.org'
+          package-manager-cache: false
       - name: Publish wrapper package
-        run: npm publish --access public
+        run: npm publish --provenance --access public
         working-directory: npm/wrapper
         env:
           NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
@@ -210,6 +218,8 @@ jobs:
           context: .
           platforms: linux/amd64,linux/arm64
           push: true
+          provenance: mode=max
+          sbom: true
           tags: |
             yacosta738/refranero:${{ needs.release-please.outputs.version }}
             ghcr.io/yacosta738/refranero:${{ needs.release-please.outputs.version }}
@@ -220,6 +230,8 @@ jobs:
           context: .
           platforms: linux/amd64,linux/arm64
           push: true
+          provenance: mode=max
+          sbom: true
           tags: |
             yacosta738/refranero:latest
             ghcr.io/yacosta738/refranero:latest
