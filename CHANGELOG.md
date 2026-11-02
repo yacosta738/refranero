@@ -1,5 +1,27 @@
 # Changelog
 
+## [0.3.2](https://github.com/yacosta738/refranero/compare/v0.3.1...v0.3.2) (2026-11-02)
+
+
+### Bug Fixes
+
+* **deps:** update rust dependencies (non-major) ([#3](https://github.com/yacosta738/refranero/issues/3)) ([e023707](https://github.com/yacosta738/refranero/commit/e023707f25601b8a988b8ca07bff74d4c7f0f7f1))
+
+
+### Documentation
+
+* **readme:** add release and technology badges ([#24](https://github.com/yacosta738/refranero/issues/24)) ([5b580da](https://github.com/yacosta738/refranero/commit/5b580da45af20b5eaa959bbcff5c3cd59a9601aa))
+
+
+### Continuous Integration
+
+* **release:** use GitHub App token and enable npm provenance ([#23](https://github.com/yacosta738/refranero/issues/23)) ([8df13ee](https://github.com/yacosta738/refranero/commit/8df13ee8bc5c76d5bd44a4a50ba073bdd0bcc65a))
+
+
+### Chores
+
+* **deps:** update rust crate webbrowser to v1.2.6 ([#25](https://github.com/yacosta738/refranero/issues/25)) ([f79c94f](https://github.com/yacosta738/refranero/commit/f79c94fc40635e4bf06adb038916223ac2c8d94a))
+
 ## [0.3.1](https://github.com/yacosta738/refranero/compare/v0.3.0...v0.3.1) (2026-11-01)
 
 
