@@ -5,6 +5,7 @@ use reqwest::blocking::Client;
 use scraper::{Html, Selector};
 use serde::Deserialize;
 use std::io::Read;
+use std::sync::Once;
 use std::time::Duration;
 use url::Url;
 
@@ -18,8 +19,23 @@ pub fn http_client() -> Result<Client> {
     http_client_with_timeout(Duration::from_secs(20))
 }
 
+/// Install the ring TLS crypto provider once per process.
+///
+/// reqwest is built with `rustls-no-provider`, so it does not select a crypto
+/// backend on its own. The application must install one before building a TLS
+/// client, otherwise reqwest has no provider to fall back on.
+fn install_crypto_provider() {
+    static INIT: Once = Once::new();
+    INIT.call_once(|| {
+        if rustls::crypto::CryptoProvider::get_default().is_none() {
+            let _ = rustls::crypto::ring::default_provider().install_default();
+        }
+    });
+}
+
 /// Create a bounded HTTP client with a caller-selected request timeout.
 pub fn http_client_with_timeout(timeout: Duration) -> Result<Client> {
+    install_crypto_provider();
     Ok(Client::builder()
         .user_agent("refranero-cli/0.1 (personal opt-in import; contact: local user)")
         .timeout(timeout)
@@ -210,6 +226,12 @@ fn normalize(raw: &str) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn installs_a_tls_crypto_provider_before_building_clients() {
+        install_crypto_provider();
+        assert!(rustls::crypto::CryptoProvider::get_default().is_some());
+    }
 
     #[test]
     fn parses_current_portal_blockquotes() {
