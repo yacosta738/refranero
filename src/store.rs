@@ -1,8 +1,12 @@
 //! SQLite storage adapter. All reads and writes are local.
 use crate::domain::{NewSaying, Saying};
 use anyhow::{bail, Context, Result};
-use rusqlite::{params, Connection, OptionalExtension};
+use rusqlite::{params, Connection, OptionalExtension, TransactionBehavior};
 use std::path::Path;
+
+// Increment when a later release changes the bundled source-link mappings.
+const SOURCE_LINK_MIGRATION_KEY: &str = "source_link_migration_version";
+const SOURCE_LINK_MIGRATION_VERSION: &str = "1";
 
 /// Owns an initialized SQLite connection.
 pub struct Store {
@@ -38,12 +42,69 @@ impl Store {
                value TEXT NOT NULL
              );",
         )?;
-        let store = Self { connection };
-        if store.count()? == 0 {
-            let seeds: Vec<NewSaying> = serde_json::from_str(include_str!("../data/seed.json"))?;
+        let mut store = Self { connection };
+        let seeds: Vec<NewSaying> = serde_json::from_str(include_str!("../data/seed.json"))?;
+        let is_new_catalog = store.count()? == 0;
+        if is_new_catalog {
             store.insert(&seeds)?;
         }
+        store.migrate_seed_source_links(&seeds, is_new_catalog)?;
         Ok(store)
+    }
+
+    fn migrate_seed_source_links(
+        &mut self,
+        seeds: &[NewSaying],
+        is_new_catalog: bool,
+    ) -> Result<()> {
+        let transaction = self
+            .connection
+            .transaction_with_behavior(TransactionBehavior::Immediate)?;
+        let applied_version = transaction
+            .query_row(
+                "SELECT value FROM metadata WHERE key = ?1",
+                [SOURCE_LINK_MIGRATION_KEY],
+                |row| row.get::<_, String>(0),
+            )
+            .optional()?;
+        if applied_version.as_deref() == Some(SOURCE_LINK_MIGRATION_VERSION) {
+            transaction.commit()?;
+            return Ok(());
+        }
+
+        for seed in seeds {
+            transaction.execute(
+                "UPDATE sayings
+                 SET source_url = ?1, original_url = ?2, captured_at = ?3
+                 WHERE text = ?4 AND category = ?5 AND language = ?6 AND source = ?7
+                   AND group_id IS ?8",
+                params![
+                    seed.source_url,
+                    seed.original_url,
+                    seed.captured_at,
+                    seed.text,
+                    seed.category,
+                    seed.language,
+                    seed.source,
+                    seed.group_id,
+                ],
+            )?;
+        }
+
+        if !is_new_catalog {
+            transaction.execute(
+                "INSERT INTO metadata(key, value) VALUES ('last_successful_refresh', '0')
+                 ON CONFLICT(key) DO UPDATE SET value = excluded.value",
+                [],
+            )?;
+        }
+        transaction.execute(
+            "INSERT INTO metadata(key, value) VALUES (?1, ?2)
+             ON CONFLICT(key) DO UPDATE SET value = excluded.value",
+            params![SOURCE_LINK_MIGRATION_KEY, SOURCE_LINK_MIGRATION_VERSION],
+        )?;
+        transaction.commit()?;
+        Ok(())
     }
 
     /// Return the Unix timestamp of the last successful automatic refresh.
@@ -424,6 +485,196 @@ mod tests {
         assert!(conn.count().unwrap() >= 10);
         assert_eq!(conn.random("xx", None, 3).unwrap().len(), 0);
         assert!(!conn.random("es", Some("refran"), 1).unwrap().is_empty());
+    }
+
+    #[test]
+    fn bundled_legacy_cvc_entries_have_openable_reference_urls() {
+        let seeds: Vec<NewSaying> =
+            serde_json::from_str(include_str!("../data/seed.json")).unwrap();
+        let cvc_seed = |text: &str| {
+            seeds
+                .iter()
+                .find(|entry| entry.source == "cvc" && entry.text == text)
+                .unwrap_or_else(|| panic!("missing seed entry: {text}"))
+        };
+
+        assert!(cvc_seed("He that would learn to pray, let him go to sea")
+            .source_url
+            .starts_with("https://idiomingo.com/"));
+        assert!(cvc_seed("Si Déu vols cridar, fica't a la mar")
+            .source_url
+            .starts_with("https://pccd.dites.cat/"));
+        for (text, timestamp) in [
+            ("A buen entendedor, pocas palabras bastan", "20261011171016"),
+            ("A quien madruga, Dios le ayuda", "20230522065136"),
+            ("Haz bien y no mires a quién", "20240511091123"),
+        ] {
+            let entry = cvc_seed(text);
+            assert!(entry
+                .source_url
+                .starts_with(&format!("https://web.archive.org/web/{timestamp}/")));
+            assert!(entry
+                .original_url
+                .as_deref()
+                .is_some_and(|url| url.contains("cvc.cervantes.es")));
+            assert!(entry.captured_at.as_deref() == Some(timestamp));
+        }
+    }
+
+    #[test]
+    fn bundled_current_portal_entries_link_to_their_cited_references() {
+        let seeds: Vec<NewSaying> =
+            serde_json::from_str(include_str!("../data/seed.json")).unwrap();
+        let portal_entries: Vec<_> = seeds
+            .iter()
+            .filter(|entry| entry.source == "cervantes_virtual")
+            .collect();
+
+        assert_eq!(portal_entries.len(), 11);
+        for entry in portal_entries {
+            let source = url::Url::parse(&entry.source_url).unwrap();
+            assert_eq!(source.scheme(), "https");
+            assert_eq!(source.host_str(), Some("www.cervantesvirtual.com"));
+            assert!(
+                source.path().starts_with("/obra/") || source.path().starts_with("/obra-visor/")
+            );
+            assert!(entry.source_url != entry.original_url.as_deref().unwrap_or_default());
+            assert!(entry
+                .original_url
+                .as_deref()
+                .is_some_and(|url| url.contains("/portales/")));
+        }
+    }
+
+    #[test]
+    fn opening_an_older_catalog_migrates_seed_urls_and_invalidates_the_portal_snapshot() {
+        let path = std::env::temp_dir().join(format!(
+            "refranero-source-link-migration-{}.sqlite3",
+            std::process::id()
+        ));
+        let _ = std::fs::remove_file(&path);
+        let old_cvc_url = "https://cvc.cervantes.es/lengua/refranero/ficha.aspx?Lng=0&Par=58807";
+        let old_portal_url =
+            "https://www.cervantesvirtual.com/portales/refranes_dichos_proverbios_citas_adivinanzas/refran/";
+        let user_entry = NewSaying {
+            text: "User-added record".into(),
+            category: "refran".into(),
+            language: "es".into(),
+            source: "manual".into(),
+            source_url: "https://example.org/user-entry".into(),
+            original_url: None,
+            captured_at: None,
+            group_id: None,
+        };
+
+        {
+            let store = Store::open(&path).unwrap();
+            store.insert(&[user_entry]).unwrap();
+            let legacy_cvc_id = store
+                .random("es", Some("refran"), 50)
+                .unwrap()
+                .into_iter()
+                .find(|saying| saying.entry.text == "Haz bien y no mires a quién")
+                .unwrap()
+                .id;
+            let legacy_portal_id = store
+                .random("es", Some("refran"), 50)
+                .unwrap()
+                .into_iter()
+                .find(|saying| saying.entry.text == "Los truenos y la mar enseñan a rezar.")
+                .unwrap()
+                .id;
+            store
+                .connection
+                .execute(
+                    "UPDATE sayings SET source_url = ?1 WHERE group_id = 'cvc:58807'",
+                    [old_cvc_url],
+                )
+                .unwrap();
+            store
+                .connection
+                .execute(
+                    "INSERT INTO metadata(key, value) VALUES ('test_legacy_cvc_id', ?1), ('test_legacy_portal_id', ?2)",
+                    params![legacy_cvc_id.to_string(), legacy_portal_id.to_string()],
+                )
+                .unwrap();
+            store
+                .connection
+                .execute(
+                    "UPDATE sayings SET source_url = ?1 WHERE text = ?2 AND source = 'cervantes_virtual'",
+                    params![old_portal_url, "Los truenos y la mar enseñan a rezar."],
+                )
+                .unwrap();
+            store
+                .connection
+                .execute(
+                    "DELETE FROM metadata WHERE key = ?1",
+                    [SOURCE_LINK_MIGRATION_KEY],
+                )
+                .unwrap();
+            let now = std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_secs() as i64;
+            store.record_successful_refresh(now).unwrap();
+        }
+
+        let store = Store::open(&path).unwrap();
+        let legacy_cvc = store
+            .random("es", Some("refran"), 50)
+            .unwrap()
+            .into_iter()
+            .find(|saying| saying.entry.text == "Haz bien y no mires a quién")
+            .unwrap();
+        let legacy_portal = store
+            .random("es", Some("refran"), 50)
+            .unwrap()
+            .into_iter()
+            .find(|saying| saying.entry.text == "Los truenos y la mar enseñan a rezar.")
+            .unwrap();
+
+        assert!(legacy_cvc
+            .entry
+            .source_url
+            .starts_with("https://web.archive.org/web/20240511091123/"));
+        assert_eq!(
+            legacy_portal.entry.source_url,
+            "https://www.cervantesvirtual.com/obra-visor/refranes-alusivos-al-tiempo/html/"
+        );
+        let legacy_cvc_id: i64 = store
+            .connection
+            .query_row(
+                "SELECT value FROM metadata WHERE key = 'test_legacy_cvc_id'",
+                [],
+                |row| row.get::<_, String>(0),
+            )
+            .unwrap()
+            .parse()
+            .unwrap();
+        let legacy_portal_id: i64 = store
+            .connection
+            .query_row(
+                "SELECT value FROM metadata WHERE key = 'test_legacy_portal_id'",
+                [],
+                |row| row.get::<_, String>(0),
+            )
+            .unwrap()
+            .parse()
+            .unwrap();
+        assert_eq!(legacy_cvc.id, legacy_cvc_id);
+        assert_eq!(legacy_portal.id, legacy_portal_id);
+        assert_eq!(store.last_successful_refresh().unwrap(), Some(0));
+        assert_eq!(store.count().unwrap(), 17);
+        assert_eq!(store.count_source("manual").unwrap(), 1);
+        store.record_successful_refresh(123).unwrap();
+        drop(store);
+
+        let reopened = Store::open(&path).unwrap();
+        assert_eq!(reopened.last_successful_refresh().unwrap(), Some(123));
+        assert_eq!(reopened.count().unwrap(), 17);
+
+        drop(reopened);
+        std::fs::remove_file(path).unwrap();
     }
 
     #[test]
