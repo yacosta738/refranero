@@ -1,0 +1,9 @@
+# The root manifest holds the developer tooling only.
+# `npm/wrapper` keeps its own manifest because it is published to npm.
+packages: []
+
+onlyBuiltDependencies:
+  - lefthook
+
+allowBuilds:
+  lefthook: true
