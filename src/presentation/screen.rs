@@ -159,13 +159,24 @@ fn help_lines(theme: &Theme, width: usize) -> Vec<String> {
 
 fn progress_line(progress: &ProgressView, width: usize, theme: &Theme) -> String {
     let label = format!("  {}", progress.label);
+    let counters = format!("{}/{}", progress.done, progress.total);
     if progress.total == 0 {
-        return theme.meta(&format!("{label}…"));
+        return theme.meta(&clip(&format!("{label}…"), width));
     }
     let percent = (progress.done * 100 / progress.total).min(100);
-    let suffix = format!(" {percent:>3}%  {}/{}", progress.done, progress.total);
-    let fixed = display_width(&label) + display_width(&suffix) + 2;
-    let bar_width = width.saturating_sub(fixed).clamp(8, 28);
+    let suffix = format!(" {percent:>3}%  {counters}");
+    let fixed = display_width(&label) + display_width(&suffix) + 1;
+
+    // No room for a bar: keep the phase, then drop the counters, then clip.
+    if width < fixed + 4 {
+        let compact = format!("{label} {percent:>3}%");
+        if display_width(&compact) <= width {
+            return theme.meta(&compact);
+        }
+        return theme.meta(&clip(&label, width));
+    }
+
+    let bar_width = (width - fixed).min(28);
     let filled = (bar_width * progress.done / progress.total).min(bar_width);
     let bar = format!(
         "{}{}",
@@ -173,6 +184,25 @@ fn progress_line(progress: &ProgressView, width: usize, theme: &Theme) -> String
         theme.meta(&"░".repeat(bar_width - filled))
     );
     format!("{label} {bar}{suffix}")
+}
+
+/// Truncate plain text to `width` visual columns, marking the cut with an ellipsis.
+fn clip(text: &str, width: usize) -> String {
+    if display_width(text) <= width {
+        return text.to_owned();
+    }
+    let mut clipped = String::new();
+    let mut used = 0;
+    for ch in text.chars() {
+        let char_width = display_width(&ch.to_string());
+        if used + char_width + 1 > width {
+            break;
+        }
+        clipped.push(ch);
+        used += char_width;
+    }
+    clipped.push('…');
+    clipped
 }
 
 fn footer(width: usize, next_language: Option<&str>, theme: &Theme) -> String {
@@ -328,6 +358,23 @@ mod tests {
         let done = compose(&options);
         assert!(!done.contains('░'), "{done}");
         assert!(done.contains("100%"), "{done}");
+    }
+
+    #[test]
+    fn progress_row_fits_every_width() {
+        let entry = saying("A quien madruga, Dios le ayuda.");
+        for width in [24, 30, 40, 80] {
+            let mut options = screen(&entry, width, 24);
+            options.progress = Some(super::ProgressView {
+                label: "Actualizando Cervantes Virtual".to_owned(),
+                done: 3,
+                total: 5,
+            });
+            let frame = compose(&options);
+            assert_fits(&frame, width);
+            assert_exact_height(&frame, 24);
+            assert!(frame.contains("Actualizando"), "width {width}: {frame}");
+        }
     }
 
     #[test]

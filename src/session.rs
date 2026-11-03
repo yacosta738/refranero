@@ -3,7 +3,7 @@
 //! The session owns I/O and catalog access. Composition stays in [`crate::presentation`], so the
 //! layout keeps its snapshot coverage.
 use std::io::{self, Write};
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 use anyhow::{Context, Result};
 use crossterm::cursor::{Hide, MoveTo, Show};
@@ -21,6 +21,15 @@ const DEFAULT_CATEGORY: &str = "refran";
 const REFRESH_POLL: Duration = Duration::from_secs(2);
 /// Progress older than this is ignored, so a dead worker cannot leave a stuck bar.
 const PROGRESS_TTL_SECONDS: i64 = 60;
+/// Categories the reader can cycle through, including `paremia` from Wayback imports.
+const CATEGORY_CYCLE: [&str; 6] = [
+    "refran",
+    "paremia",
+    "proverbio",
+    "dicho",
+    "adivinanza",
+    "cita",
+];
 
 /// One reading session over the local catalog.
 pub struct Session<'a> {
@@ -90,14 +99,21 @@ impl<'a> Session<'a> {
     pub fn run(&mut self) -> Result<()> {
         let mut terminal = TerminalGuard::enter()?;
         let mut stdout = io::stdout();
+        let mut next_poll = Instant::now() + REFRESH_POLL;
         loop {
             if self.dirty {
                 let (width, height) = terminal::size().unwrap_or((80, 24));
                 self.draw(&mut stdout, width, height)?;
                 self.dirty = false;
             }
-            if !event::poll(REFRESH_POLL)? {
+            let now = Instant::now();
+            if now >= next_poll {
                 self.poll_refresh();
+                next_poll = Instant::now() + REFRESH_POLL;
+                continue;
+            }
+            let wait = next_poll.saturating_duration_since(now).min(REFRESH_POLL);
+            if !event::poll(wait)? {
                 continue;
             }
             match event::read()? {
@@ -196,10 +212,13 @@ impl<'a> Session<'a> {
         if virtual_latest == self.observed_refresh && wayback_latest == self.observed_wayback {
             return;
         }
+        // Keep the old generation when the reload fails so the next poll retries it.
+        if self.reload_variants().is_err() {
+            return;
+        }
         self.observed_refresh = virtual_latest;
         self.observed_wayback = wayback_latest;
         self.message = Some("Catálogo actualizado".to_owned());
-        let _ = self.reload_variants();
         self.dirty = true;
     }
 
@@ -274,34 +293,29 @@ impl<'a> Session<'a> {
     }
 
     fn cycle_category(&mut self) -> Result<()> {
-        let categories: Vec<&str> = Category::all()
-            .iter()
-            .map(|category| category.as_str())
-            .collect();
         let current = self.category.as_deref().unwrap_or(DEFAULT_CATEGORY);
-        let Some(next) = next_in_str(&categories, current) else {
-            return Ok(());
-        };
+        let start = CATEGORY_CYCLE
+            .iter()
+            .position(|category| *category == current)
+            .unwrap_or(0);
         let language = self.current.entry.language.clone();
-        match self
-            .store
-            .random(&language, Some(&next), 1)?
-            .into_iter()
-            .next()
-        {
-            Some(saying) => {
-                self.category = Some(next.clone());
+
+        for offset in 1..=CATEGORY_CYCLE.len() {
+            let next = CATEGORY_CYCLE[(start + offset) % CATEGORY_CYCLE.len()];
+            let candidate = self
+                .store
+                .random(&language, Some(next), 1)?
+                .into_iter()
+                .next();
+            if let Some(saying) = candidate {
+                self.category = Some(next.to_owned());
                 self.current = saying;
                 self.reload_variants()?;
-                self.message = Some(format!("Categoría: {}", presentation::category_name(&next)));
-            }
-            None => {
-                self.message = Some(format!(
-                    "Sin entradas en {}",
-                    presentation::category_name(&next)
-                ));
+                self.message = Some(format!("Categoría: {}", presentation::category_name(next)));
+                return Ok(());
             }
         }
+        self.message = Some("Sin entradas en otras categorías para este idioma".to_owned());
         Ok(())
     }
 
@@ -330,14 +344,6 @@ fn spanish_first(codes: &mut Vec<String>) {
     }
 }
 
-fn next_in_str(items: &[&str], current: &str) -> Option<String> {
-    let index = items
-        .iter()
-        .position(|item| *item == current)
-        .map_or(0, |index| (index + 1) % items.len());
-    items.get(index).map(|value| (*value).to_owned())
-}
-
 struct TerminalGuard {
     active: bool,
 }
@@ -345,9 +351,11 @@ struct TerminalGuard {
 impl TerminalGuard {
     fn enter() -> Result<Self> {
         terminal::enable_raw_mode().context("enabling raw mode")?;
+        // Own the guard before the alternate screen so a failure still restores raw mode.
+        let guard = Self { active: true };
         execute!(io::stdout(), EnterAlternateScreen, Hide)
             .context("entering the alternate screen")?;
-        Ok(Self { active: true })
+        Ok(guard)
     }
 
     fn leave(&mut self) -> Result<()> {
@@ -355,10 +363,15 @@ impl TerminalGuard {
             return Ok(());
         }
         self.active = false;
-        execute!(io::stdout(), Show, LeaveAlternateScreen)
-            .context("leaving the alternate screen")?;
-        terminal::disable_raw_mode().context("disabling raw mode")?;
-        Ok(())
+        let screen = execute!(io::stdout(), Show, LeaveAlternateScreen)
+            .context("leaving the alternate screen");
+        // Raw mode must be restored even when the screen restoration fails.
+        let raw = terminal::disable_raw_mode().context("disabling raw mode");
+        match (screen, raw) {
+            (Err(error), _) => Err(error),
+            (Ok(()), Err(error)) => Err(error),
+            (Ok(()), Ok(())) => Ok(()),
+        }
     }
 }
 
@@ -372,19 +385,12 @@ impl Drop for TerminalGuard {
 mod tests {
     use std::path::Path;
 
-    use super::{next_in_str, Session};
+    use super::Session;
     use crate::presentation::ColorMode;
     use crate::store::{RefreshProgress, Store};
 
     fn store() -> Store {
         Store::open(Path::new(":memory:")).unwrap()
-    }
-
-    #[test]
-    fn next_in_str_returns_a_static_value() {
-        let items = ["refran", "proverbio", "dicho"];
-        assert_eq!(next_in_str(&items, "refran").as_deref(), Some("proverbio"));
-        assert_eq!(next_in_str(&items, "dicho").as_deref(), Some("refran"));
     }
 
     #[test]
@@ -491,6 +497,31 @@ mod tests {
     }
 
     #[test]
+    fn cycle_category_skips_categories_without_entries() {
+        let store = store();
+        let dicho = store
+            .random("es", Some("dicho"), 1)
+            .unwrap()
+            .into_iter()
+            .next()
+            .unwrap();
+        let mut session =
+            Session::with_current(&store, dicho, Some("dicho".to_owned()), ColorMode::Never)
+                .unwrap();
+
+        session.cycle_category().unwrap();
+        assert_ne!(session.category.as_deref(), Some("dicho"));
+        assert_eq!(
+            session.category.as_deref(),
+            Some(session.current.entry.category.as_str())
+        );
+        assert!(session
+            .message
+            .as_deref()
+            .is_some_and(|message| message.starts_with("Categoría:")));
+    }
+
+    #[test]
     fn shows_and_clears_worker_progress() {
         let path = std::env::temp_dir().join(format!(
             "refranero-progress-{}-{:?}.sqlite3",
@@ -502,7 +533,7 @@ mod tests {
         }
 
         let reader = Store::open(&path).unwrap();
-        let writer = Store::open(&path).unwrap();
+        let mut writer = Store::open(&path).unwrap();
         let saying = reader
             .random("es", Some("refran"), 1)
             .unwrap()
@@ -539,7 +570,10 @@ mod tests {
         session.poll_refresh();
         assert!(session.progress.is_none());
 
-        writer.clear_refresh_progress().unwrap();
+        writer
+            .try_acquire_refresh_lease(super::unix_now(), "test-worker")
+            .unwrap();
+        writer.clear_refresh_progress("test-worker").unwrap();
         session.poll_refresh();
         assert!(session.progress.is_none());
 
@@ -563,7 +597,7 @@ mod tests {
         }
 
         let reader = Store::open(&path).unwrap();
-        let writer = Store::open(&path).unwrap();
+        let mut writer = Store::open(&path).unwrap();
         let saying = reader
             .random("es", Some("refran"), 1)
             .unwrap()
@@ -588,7 +622,7 @@ mod tests {
         assert!(session.message.is_none(), "{:?}", session.message);
 
         // A Wayback-only refresh must also be announced.
-        writer.record_wayback_refresh(1_700_000_500).unwrap();
+        writer.record_wayback_success('A', 1_700_000_500).unwrap();
         session.poll_refresh();
         assert_eq!(session.message.as_deref(), Some("Catálogo actualizado"));
 

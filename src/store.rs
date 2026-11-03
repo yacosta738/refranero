@@ -212,9 +212,21 @@ impl Store {
             .transpose()
     }
 
-    /// Record a successful Wayback refresh.
-    pub fn record_wayback_refresh(&self, timestamp: i64) -> Result<()> {
-        self.set_metadata(WAYBACK_REFRESH_KEY, &timestamp.to_string())
+    /// Record a successful Wayback run and the processed letter in one transaction.
+    pub fn record_wayback_success(&mut self, letter: char, timestamp: i64) -> Result<()> {
+        let transaction = self.connection.transaction()?;
+        for (key, value) in [
+            (WAYBACK_REFRESH_KEY, timestamp.to_string()),
+            (WAYBACK_CURSOR_KEY, letter.to_string()),
+        ] {
+            transaction.execute(
+                "INSERT INTO metadata(key, value) VALUES (?1, ?2)
+                 ON CONFLICT(key) DO UPDATE SET value = excluded.value",
+                params![key, value],
+            )?;
+        }
+        transaction.commit()?;
+        Ok(())
     }
 
     /// Letter the automatic Wayback job should process next.
@@ -222,11 +234,6 @@ impl Store {
         Ok(self
             .metadata(WAYBACK_CURSOR_KEY)?
             .and_then(|value| value.chars().next()))
-    }
-
-    /// Store the next Wayback letter.
-    pub fn set_wayback_cursor(&self, letter: char) -> Result<()> {
-        self.set_metadata(WAYBACK_CURSOR_KEY, &letter.to_string())
     }
 
     /// Publish refresh progress for the interactive reader.
@@ -243,11 +250,14 @@ impl Store {
         Ok(serde_json::from_str(&value).ok())
     }
 
-    /// Remove published progress once a refresh ends.
-    pub fn clear_refresh_progress(&self) -> Result<()> {
+    /// Remove published progress, but only while `owner` still holds the refresh lease.
+    pub fn clear_refresh_progress(&self, owner: &str) -> Result<()> {
         self.connection.execute(
-            "DELETE FROM metadata WHERE key = ?1",
-            [REFRESH_PROGRESS_KEY],
+            "DELETE FROM metadata WHERE key = ?1
+             AND EXISTS (
+               SELECT 1 FROM metadata WHERE key = 'refresh_lease_owner' AND value = ?2
+             )",
+            params![REFRESH_PROGRESS_KEY, owner],
         )?;
         Ok(())
     }
@@ -959,9 +969,10 @@ mod tests {
     }
 
     #[test]
-    fn publishes_and_clears_refresh_progress() {
-        let store = Store::open(Path::new(":memory:")).unwrap();
+    fn publishes_and_clears_refresh_progress_only_for_the_lease_owner() {
+        let mut store = Store::open(Path::new(":memory:")).unwrap();
         assert!(store.refresh_progress().unwrap().is_none());
+        assert!(store.try_acquire_refresh_lease(1_000, "worker-a").unwrap());
 
         let progress = RefreshProgress {
             phase: "Wayback".into(),
@@ -970,9 +981,16 @@ mod tests {
             updated_at: 100,
         };
         store.set_refresh_progress(&progress).unwrap();
-        assert_eq!(store.refresh_progress().unwrap(), Some(progress));
+        assert_eq!(store.refresh_progress().unwrap(), Some(progress.clone()));
 
-        store.clear_refresh_progress().unwrap();
+        store.clear_refresh_progress("worker-b").unwrap();
+        assert_eq!(
+            store.refresh_progress().unwrap(),
+            Some(progress),
+            "another owner must not clear the bar"
+        );
+
+        store.clear_refresh_progress("worker-a").unwrap();
         assert!(store.refresh_progress().unwrap().is_none());
     }
 
@@ -984,13 +1002,12 @@ mod tests {
     }
 
     #[test]
-    fn stores_wayback_marker_and_cursor() {
-        let store = Store::open(Path::new(":memory:")).unwrap();
+    fn stores_wayback_marker_and_cursor_atomically() {
+        let mut store = Store::open(Path::new(":memory:")).unwrap();
         assert_eq!(store.last_wayback_refresh().unwrap(), None);
         assert_eq!(store.wayback_cursor().unwrap(), None);
 
-        store.record_wayback_refresh(42).unwrap();
-        store.set_wayback_cursor('C').unwrap();
+        store.record_wayback_success('C', 42).unwrap();
         assert_eq!(store.last_wayback_refresh().unwrap(), Some(42));
         assert_eq!(store.wayback_cursor().unwrap(), Some('C'));
     }

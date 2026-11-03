@@ -26,7 +26,7 @@ pub fn clean(input: &str) -> String {
                 skip_control_sequence(&mut chars);
                 continue;
             }
-            '\u{9D}' => {
+            '\u{9D}' | '\u{90}' | '\u{98}' | '\u{9E}' | '\u{9F}' => {
                 skip_string(&mut chars);
                 continue;
             }
@@ -87,18 +87,29 @@ fn skip_control_sequence(chars: &mut Peekable<Chars<'_>>) {
     }
 }
 
-/// Skip an OSC or DCS payload, which ends with BEL or a string terminator.
+/// Skip an OSC or DCS payload, which ends with BEL, ST or the C1 ST control.
+///
+/// An ESC that does not start a string terminator is left for [`skip_escape`], so the escape
+/// sequence that follows it is still neutralised instead of being printed literally.
 fn skip_string(chars: &mut Peekable<Chars<'_>>) {
-    while let Some(ch) = chars.next() {
+    while let Some(&ch) = chars.peek() {
         match ch {
-            '\u{7}' => break,
+            '\u{7}' | '\u{9C}' => {
+                chars.next();
+                break;
+            }
             '\u{1b}' => {
-                if chars.peek() == Some(&'\\') {
+                let mut lookahead = chars.clone();
+                lookahead.next();
+                if lookahead.peek() == Some(&'\\') {
+                    chars.next();
                     chars.next();
                 }
                 break;
             }
-            _ => {}
+            _ => {
+                chars.next();
+            }
         }
     }
 }
@@ -150,6 +161,16 @@ mod tests {
     fn strips_eight_bit_c1_sequences() {
         assert_eq!(clean("a\u{9B}2Jb"), "ab");
         assert_eq!(clean("a\u{9D}0;t\u{7}b"), "ab");
+        for introducer in ['\u{90}', '\u{98}', '\u{9E}', '\u{9F}'] {
+            let hostile = format!("a{introducer}payload\u{9C}b");
+            assert_eq!(clean(&hostile), "ab", "introducer {introducer:?}");
+        }
+    }
+
+    #[test]
+    fn keeps_a_nested_escape_visible_to_the_cleaner() {
+        // An ESC inside an OSC payload that does not start an ST must not be swallowed.
+        assert_eq!(clean("a\x1b]0;title\x1b[31mb"), "ab");
     }
 
     #[test]

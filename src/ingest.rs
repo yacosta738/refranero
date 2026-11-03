@@ -522,9 +522,14 @@ fn parse_wayback_ficha(html: &str) -> Option<String> {
     None
 }
 
-fn collect_wayback_variants<F>(links: &[WaybackLanguageLink], mut fetch: F) -> VariantCollection
+fn collect_wayback_variants<F, P>(
+    links: &[WaybackLanguageLink],
+    mut fetch: F,
+    on_activity: &mut P,
+) -> VariantCollection
 where
     F: FnMut(&WaybackLanguageLink) -> Result<Option<CapturedFicha>>,
+    P: FnMut(),
 {
     let mut collection = VariantCollection {
         entries: Vec::new(),
@@ -537,6 +542,8 @@ where
         if link.language == "es" {
             continue;
         }
+        // Refresh the progress timestamp before each variant so a slow root does not look stalled.
+        on_activity();
         match fetch(link) {
             Ok(Some(capture)) => {
                 collection.available += 1;
@@ -631,9 +638,11 @@ where
 
                 let discovery = parse_wayback_language_links(&capture.html, &par);
                 report.warnings.extend(discovery.warnings);
-                let variants = collect_wayback_variants(&discovery.links, |link| {
-                    fetch(&link.original_url, year)
-                });
+                let variants = collect_wayback_variants(
+                    &discovery.links,
+                    |link| fetch(&link.original_url, year),
+                    &mut || on_progress(index, roots_processed),
+                );
                 report.variants_available += variants.available;
                 report.variants_unavailable += variants.unavailable;
                 report.warnings.extend(variants.warnings);
@@ -961,9 +970,12 @@ mod tests {
             },
         ];
         let mut processed = Vec::new();
-        let report = collect_wayback_variants(&links, |link| {
-            processed.push(link.language.clone());
-            match link.language.as_str() {
+        let mut activity = 0;
+        let report = collect_wayback_variants(
+            &links,
+            |link| {
+                processed.push(link.language.clone());
+                match link.language.as_str() {
                 "en" => Ok(Some(CapturedFicha {
                     html: r#"<div id="ficha"><div class="tabber"><div class="tabbertab">
                         <h2>Paremia</h2><p><strong>Enunciado: </strong>Do good without looking at whom</p>
@@ -978,9 +990,12 @@ mod tests {
                 "ca" => Err(anyhow!("temporary archive failure")),
                 _ => Ok(None),
             }
-        });
+            },
+            &mut || activity += 1,
+        );
 
         assert_eq!(processed, vec!["en", "ca", "fr"]);
+        assert_eq!(activity, 3, "progress ticks before each variant fetch");
         assert_eq!(report.entries.len(), 1);
         assert_eq!(report.available, 1);
         assert_eq!(report.entries[0].language, "en");

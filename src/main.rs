@@ -6,7 +6,7 @@ mod refresh;
 mod session;
 mod store;
 
-use anyhow::{bail, Context, Result};
+use anyhow::{anyhow, bail, Context, Result};
 use clap::{Parser, Subcommand};
 use domain::Category;
 use std::io::IsTerminal;
@@ -223,7 +223,7 @@ fn schedule_background_refresh(
             }
             Err(error) => {
                 eprintln!("Warning: could not check Wayback age: {error:#}");
-                return;
+                false
             }
         };
     if !virtual_due && !wayback_due {
@@ -282,24 +282,49 @@ fn run_refresh_worker(db: &std::path::Path, owner: &str, allow_wayback: bool) ->
     let virtual_due = refresh::refresh_decision(store.last_successful_refresh()?, now, false)
         == refresh::RefreshDecision::Stale;
     let wayback_due = allow_wayback
-        && refresh::wayback_refresh_decision(store.last_wayback_refresh()?, now, false)
-            == refresh::RefreshDecision::Stale;
+        && match store.last_wayback_refresh() {
+            Ok(value) => {
+                refresh::wayback_refresh_decision(value, now, false)
+                    == refresh::RefreshDecision::Stale
+            }
+            Err(error) => {
+                eprintln!("Warning: could not check Wayback age: {error:#}");
+                false
+            }
+        };
     if !virtual_due && !wayback_due {
         return store.release_refresh_lease(owner);
     }
 
-    let result = (|| -> Result<()> {
-        if virtual_due {
-            refresh_virtual(&mut store, owner)?;
+    // A Virtual failure must not cancel due Wayback work, and a lost lease must.
+    let mut first_error: Option<anyhow::Error> = None;
+    if virtual_due {
+        if let Err(error) = refresh_virtual(&mut store, owner) {
+            first_error = Some(error);
         }
-        if wayback_due {
-            refresh_wayback(&store, owner)?;
+    }
+    if wayback_due {
+        match store.renew_refresh_lease(unix_timestamp(), owner) {
+            Ok(true) => {
+                if let Err(error) = refresh_wayback(&mut store, owner) {
+                    first_error.get_or_insert(error);
+                }
+            }
+            Ok(false) => {
+                first_error
+                    .get_or_insert_with(|| anyhow!("refresh lease lost before the Wayback run"));
+            }
+            Err(error) => {
+                first_error.get_or_insert(error);
+            }
         }
-        Ok(())
-    })();
-    let cleared = store.clear_refresh_progress();
+    }
+
+    let cleared = store.clear_refresh_progress(owner);
     let released = store.release_refresh_lease(owner);
-    result?;
+    if let Some(error) = first_error {
+        return Err(error);
+    }
     cleared?;
     released?;
     Ok(())
@@ -343,29 +368,46 @@ fn refresh_virtual(store: &mut Store, owner: &str) -> Result<()> {
     Ok(())
 }
 
-fn refresh_wayback(store: &Store, owner: &str) -> Result<()> {
+fn refresh_wayback(store: &mut Store, owner: &str) -> Result<()> {
     let letter = refresh::next_letter(store.wayback_cursor()?);
     let phase = format!("Wayback {letter}");
     let client = ingest::http_client_with_timeout(std::time::Duration::from_secs(5))?;
+    let mut lease_lost = false;
     let report = ingest::import_wayback_with_progress(
         &client,
         letter,
         refresh::year_from_unix(unix_timestamp()),
         refresh::AUTOMATIC_WAYBACK_LIMIT,
         |done, total| {
-            let _ = store.renew_refresh_lease(unix_timestamp(), owner);
-            publish_progress(store, &phase, done, total);
+            if lease_lost {
+                return;
+            }
+            match store.renew_refresh_lease(unix_timestamp(), owner) {
+                Ok(true) => publish_progress(store, &phase, done, total),
+                Ok(false) | Err(_) => lease_lost = true,
+            }
         },
     )?;
+    if lease_lost {
+        bail!("refresh lease lost during the Wayback run; not writing results");
+    }
     if report.entries.is_empty() {
         bail!("no CVC fichas discovered in the archived index for letter {letter}");
     }
     let inserted = store.insert_wayback(&report.entries, &report.captured_spanish_pars)?;
-    store.record_wayback_refresh(unix_timestamp())?;
-    store.set_wayback_cursor(letter)?;
+    for warning in &report.warnings {
+        eprintln!(
+            "Wayback {letter} warning: Par={} language={}: {}",
+            warning.par,
+            warning.language.as_deref().unwrap_or("unknown"),
+            warning.reason
+        );
+    }
+    store.record_wayback_success(letter, unix_timestamp())?;
     eprintln!(
-        "Wayback {letter} refresh: {} roots, {inserted} new entries.",
-        report.roots_processed
+        "Wayback {letter} refresh: {} roots, {inserted} new entries, {} warnings.",
+        report.roots_processed,
+        report.warnings.len()
     );
     Ok(())
 }
