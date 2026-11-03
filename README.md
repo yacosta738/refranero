@@ -30,10 +30,13 @@ run:
 refranero
 ```
 
-This prints one random Spanish refrán from the local catalog. The output shows
-the saying, its category and source, its local entry ID, and a source URL. On
-first use, Refranero creates the SQLite catalog and seeds it with 16 starter
-entries.
+In a terminal this opens the interactive reader with one random Spanish refrán
+from the local catalog. The screen shows the saying, a readable source, its local
+entry ID and a source hyperlink. On first use, Refranero creates the SQLite
+catalog and seeds it with 16 starter entries.
+
+Add `--plain` to print once and exit. Redirecting the output does the same, so
+scripts keep working.
 
 To run it once without a global install, use either npm or pnpm:
 
@@ -43,8 +46,8 @@ npx --yes @yacosta738/refranero@latest
 pnpm dlx @yacosta738/refranero@latest
 ```
 
-Both commands run the default random-refrán use case. Node.js 18 or newer is
-required for the npm and pnpm packages.
+Both commands open the same interactive reader, or print once when the output is
+redirected. Node.js 18 or newer is required for the npm and pnpm packages.
 
 ## Installation options
 
@@ -89,6 +92,46 @@ docker run --rm yacosta738/refranero:latest --offline
 The container displays CLI help when no arguments are provided. Pass
 `--offline` to run the default random-refrán command without scheduling a
 catalog refresh.
+
+## Interactive reader
+
+When `stdin` and `stdout` are terminals, `refranero` opens a full-screen reader.
+The automatic refresh check runs before the reader opens, and its worker keeps
+updating the catalog in the background while you read. The reader announces
+`Catálogo actualizado` when the new data lands; the entry on screen is not
+replaced under you. Use `--offline` to skip the refresh entirely.
+
+While the worker runs, the reader draws a status bar above the key map with the
+phase, a block bar, the percentage and the completed units:
+
+```text
+  Actualizando Wayback A ███████████░░░░░░░░░░░░░░░░░  40%  4/10
+```
+
+| Key | Action |
+| --- | --- |
+| `n`, `Enter`, `Space` | Next random refrán |
+| `l`, `→` | Next language or multilingual variant |
+| `h`, `←` | Previous language or variant |
+| `c` | Next category |
+| `o` | Open the source in the browser |
+| `?` | Show or hide the key map |
+| `q`, `Esc`, `Ctrl-C` | Quit |
+
+The reader lists the available language codes under the title and boxes the
+current one. The caption reads `Otros idiomas` when the codes are translations of
+the same entry, and `Idioma` when the entry only exists in one language.
+
+`l` and `h` rotate the translations of the entry on screen and never replace it
+with a different refrán. Multilingual variants come from `sync wayback`; the
+starter catalog only has one group with Catalan and English translations. When the
+entry has no group, the strip keeps its own language visible and `l` reports that
+there are no other versions. Use `--lang` to browse another language.
+
+The reader is skipped, and the command prints once, when `stdout` is redirected,
+`stdin` is not a terminal, `--json` is set, `--count` is above 1, `--browser` is
+set, or `--plain` is passed. Redirected output never contains escape sequences,
+so it stays usable in scripts.
 
 ## Common use cases
 
@@ -135,6 +178,41 @@ fields.
 refranero --json --count 3
 ```
 
+### Terminal presentation
+
+The default output adapts to the terminal width and respects the reader's theme.
+Styles use named ANSI colors only, so the palette configured in the terminal
+stays in control.
+
+| Available width | Layout |
+| --- | --- |
+| 70 columns or more | Editorial: category eyebrow, rule, quote gutter |
+| 40–69 columns | Compact: same hierarchy without the rule |
+| Fewer than 40 columns | Plain lines with wrapped text |
+| Redirected output | Plain text with no escape sequences |
+
+`--count` above one prints a numbered collection instead of repeated cards.
+Every entry keeps the same composition, whether you read it with the default
+command, `open`, or `--browser`.
+
+Terminal capabilities also change the output:
+
+- Stored text is printed with control characters, terminal escape sequences and
+  bidi overrides removed. Stored records are not modified.
+- Interactive terminals show `↗ Consultar fuente` as an OSC 8 hyperlink. Other
+  outputs print the full URL on its own line, never wrapped, so it stays
+  copyable.
+- `NO_COLOR` set to a non-empty value disables styling and hyperlinks.
+- `--json` never changes: no colors, no headers, no extra characters.
+
+Use `--color` to override the automatic decision:
+
+```sh
+refranero --color never    # plain text even in a terminal
+refranero --color always   # styles even when redirected
+refranero --color auto     # default
+```
+
 ### Open a source in the browser
 
 Use `--browser` to open the source URL for each randomly selected entry:
@@ -175,16 +253,28 @@ refranero --db ./catalog.sqlite3 stats
 
 ## Import and refresh data
 
-The random command reads local data first. If the catalog has never completed
-a current-portal refresh, or the last successful refresh is more than 24 hours
-old, Refranero schedules a background refresh after printing the result. It
-does not wait for the refresh to finish. Use `--offline` to skip this
-automatic refresh and use only the local catalog.
+The random command reads local data first. When the interactive reader opens, or
+when the catalog is stale, Refranero schedules a background refresh and does not
+wait for it. Use `--offline` to skip it and use only the local catalog.
 
-The automatic refresh updates the current Cervantes Virtual snapshot. It does
-not replace entries imported from the historical CVC/Wayback source. Refresh
-output is appended to a `catalog.refresh.log` file next to the SQLite
-database.
+The automatic refresh covers two sources on separate cycles:
+
+- **Cervantes Virtual** (24 hours): replaces the current-portal snapshot.
+- **Wayback** (7 days, interactive reader only): imports one archived letter per
+  run, advancing A→Z and wrapping around, with a bounded number of root fichas.
+  It uses the current year to pick the nearest capture. The job is not scheduled
+  for redirected output, so a script never starts a long crawl.
+
+On a fresh catalog the Wayback run is due immediately, so the first interactive
+launch may start it. A failed run keeps its letter and retries on the next
+interactive launch; closing the reader does not stop a worker that is already
+running.
+
+Refresh output is appended to a `catalog.refresh.log` file next to the SQLite
+database. While the reader is open, the worker publishes its progress and the
+reader draws a status bar with the phase, a block bar, the percentage and the
+completed units. The catalog runs in WAL mode, so reading continues while the
+worker commits.
 
 Current-portal entries use the per-entry reference in the page's `blockquote`
 `cite` attribute. Refranero validates the host and upgrades HTTP references to
@@ -199,8 +289,8 @@ using the same per-page limit as automatic refresh. This replaces prior
 the next online random read schedules the refresh in the background.
 
 Only the random command schedules this automatic refresh. `open`, `stats`,
-and `import` do not schedule it. An explicit `sync` command makes its own
-network requests.
+`import` and `sync` do not schedule it. An explicit `sync` command always makes
+its own network requests.
 
 ### Import a local JSON file
 
@@ -265,14 +355,17 @@ always requests remote pages.
 
 ### Random selection
 
-- `refranero` or `refranero random`: print random local entries. The default is
-  one Spanish `refran`.
+- `refranero` or `refranero random`: open the interactive reader in a terminal,
+  or print random local entries when the output is redirected. The default is one
+  Spanish `refran`.
 - `--count <N>`: choose 1–20 entries. The default is `1`.
 - `--category <CATEGORY>`: filter random results and random `open` selections.
   The default is `refran`.
 - `--lang <CODE>`: filter by language code, such as `es`, `en`, or `ca`. The
   default is `es`.
 - `--json`: print random results as JSON instead of terminal-friendly text.
+- `--color <auto|always|never>`: control ANSI styling. The default is `auto`.
+- `--plain`: print once and exit instead of opening the interactive reader.
 - `--browser`: open the source URL for each random result. The default is off.
 - `--offline`: skip automatic refresh scheduling for random reads. The default
   is off.
@@ -337,7 +430,9 @@ src/
   domain.rs     Category and saying types
   store.rs      Validated SQLite catalog
   ingest.rs     Cervantes Virtual and Wayback import adapters
-  refresh.rs    Background refresh policy
+  refresh.rs    Background refresh policy and Wayback cycle
+  session.rs    Interactive reader: terminal lifecycle and key handling
+  presentation/ Terminal composition: renderer, screen, theme, labels, sanitization
 
 data/seed.json               Small offline starter catalog
 data/import-example.json     Local import format example

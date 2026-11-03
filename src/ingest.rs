@@ -246,6 +246,20 @@ pub fn import_wayback(
     year: u16,
     limit: usize,
 ) -> Result<WaybackImportReport> {
+    import_wayback_with_progress(client, letter, year, limit, |_, _| {})
+}
+
+/// Same as [`import_wayback`], reporting `(done, total)` roots so a UI can draw progress.
+pub fn import_wayback_with_progress<P>(
+    client: &Client,
+    letter: char,
+    year: u16,
+    limit: usize,
+    mut on_progress: P,
+) -> Result<WaybackImportReport>
+where
+    P: FnMut(usize, usize),
+{
     if !letter.is_ascii_alphabetic() {
         bail!("--letter must be one ASCII alphabetic character");
     }
@@ -265,6 +279,7 @@ pub fn import_wayback(
         roots,
         year,
         |original_url, target_year| fetch_wayback_ficha(client, original_url, target_year),
+        &mut on_progress,
     ))
 }
 
@@ -343,9 +358,13 @@ struct WaybackLanguageLink {
     par: String,
 }
 
+/// One skipped or partially failed language ficha during a Wayback import.
 pub struct WaybackImportWarning {
+    /// CVC `Par` identifier of the ficha.
     pub par: String,
+    /// Language code when it was known, `None` when the link had no acronym.
     pub language: Option<String>,
+    /// Human-readable explanation, written to stderr by `sync wayback`.
     pub reason: String,
 }
 
@@ -367,13 +386,19 @@ struct VariantCollection {
     warnings: Vec<WaybackImportWarning>,
 }
 
+/// Result of one archived-index import run.
 pub struct WaybackImportReport {
+    /// Records retrieved, including the Spanish root and its available variants.
     pub entries: Vec<NewSaying>,
+    /// Spanish root fichas discovered and processed.
     pub roots_processed: usize,
+    /// Linked variants with an HTTP 200 capture.
     pub variants_available: usize,
+    /// Linked variants without a usable capture.
     pub variants_unavailable: usize,
     /// Spanish `Par` IDs with a confirmed `Lng=0` capture in this import run.
     pub captured_spanish_pars: HashSet<String>,
+    /// Skipped fichas and their reasons.
     pub warnings: Vec<WaybackImportWarning>,
 }
 
@@ -406,7 +431,7 @@ fn parse_wayback_language_links(html: &str, expected_par: &str) -> LanguageDisco
             }
             let Some(acronym_element) = element.select(&acronyms).next() else {
                 warnings.push(WaybackImportWarning {
-                    par: par.clone(),
+                    par,
                     language: None,
                     reason: format!("missing language acronym for Lng={lng}"),
                 });
@@ -415,7 +440,7 @@ fn parse_wayback_language_links(html: &str, expected_par: &str) -> LanguageDisco
             let acronym = acronym_element.text().collect::<String>();
             let Some(language) = language_code(&acronym) else {
                 warnings.push(WaybackImportWarning {
-                    par: par.clone(),
+                    par,
                     language: Some(acronym.trim().to_ascii_lowercase()),
                     reason: format!("unknown CVC language acronym {acronym:?}"),
                 });
@@ -552,9 +577,15 @@ fn update_spanish_provenance(entry: &mut NewSaying, original_url: &Url, capture:
     entry.captured_at = Some(capture.timestamp.clone());
 }
 
-fn collect_wayback_fichas<F>(roots: Vec<NewSaying>, year: u16, mut fetch: F) -> WaybackImportReport
+fn collect_wayback_fichas<F, P>(
+    roots: Vec<NewSaying>,
+    year: u16,
+    mut fetch: F,
+    on_progress: &mut P,
+) -> WaybackImportReport
 where
     F: FnMut(&Url, u16) -> Result<Option<CapturedFicha>>,
+    P: FnMut(usize, usize),
 {
     let roots_processed = roots.len();
     let mut report = WaybackImportReport {
@@ -566,7 +597,8 @@ where
         warnings: Vec::new(),
     };
 
-    for mut entry in roots {
+    for (index, mut entry) in roots.into_iter().enumerate() {
+        on_progress(index, roots_processed);
         let par = entry
             .group_id
             .as_deref()
@@ -628,6 +660,7 @@ where
             }
         }
     }
+    on_progress(roots_processed, roots_processed);
 
     report
 }
@@ -1068,29 +1101,34 @@ mod tests {
             </div>
         </div></div>"#;
 
-        let report = collect_wayback_fichas(roots, 2024, |url, _year| {
-            let lng = url
-                .query_pairs()
-                .find(|(key, _)| key.eq_ignore_ascii_case("Lng"))
-                .map(|(_, value)| value.into_owned())
-                .unwrap();
-            let (html, timestamp) = match lng.as_str() {
-                "0" => (root_html, "20240512091123"),
-                "9" => (english_html, "20240513091123"),
-                "10" => return Ok(None),
-                "1" => return Err(anyhow!("temporary archive failure")),
-                _ => panic!("unexpected Lng={lng}"),
-            };
-            Ok(Some(CapturedFicha {
-                html: html.into(),
-                replay_url: Url::parse(&format!(
-                    "https://web.archive.org/web/{timestamp}/{}",
-                    url.as_str()
-                ))
-                .unwrap(),
-                timestamp: timestamp.into(),
-            }))
-        });
+        let report = collect_wayback_fichas(
+            roots,
+            2024,
+            |url, _year| {
+                let lng = url
+                    .query_pairs()
+                    .find(|(key, _)| key.eq_ignore_ascii_case("Lng"))
+                    .map(|(_, value)| value.into_owned())
+                    .unwrap();
+                let (html, timestamp) = match lng.as_str() {
+                    "0" => (root_html, "20240512091123"),
+                    "9" => (english_html, "20240513091123"),
+                    "10" => return Ok(None),
+                    "1" => return Err(anyhow!("temporary archive failure")),
+                    _ => panic!("unexpected Lng={lng}"),
+                };
+                Ok(Some(CapturedFicha {
+                    html: html.into(),
+                    replay_url: Url::parse(&format!(
+                        "https://web.archive.org/web/{timestamp}/{}",
+                        url.as_str()
+                    ))
+                    .unwrap(),
+                    timestamp: timestamp.into(),
+                }))
+            },
+            &mut |_, _| {},
+        );
 
         assert_eq!(report.roots_processed, 1);
         assert_eq!(report.variants_available, 2);
@@ -1116,7 +1154,7 @@ mod tests {
     fn keeps_index_record_when_spanish_ficha_has_no_capture() {
         let index = r#"<a href="Ficha.aspx?Par=58807&amp;Lng=0">Haz bien y no mires a quién</a>"#;
         let roots = parse_wayback_index(index, "20240511091123", 1);
-        let report = collect_wayback_fichas(roots, 2024, |_url, _year| Ok(None));
+        let report = collect_wayback_fichas(roots, 2024, |_url, _year| Ok(None), &mut |_, _| {});
 
         assert_eq!(report.entries.len(), 1);
         assert_eq!(report.entries[0].language, "es");

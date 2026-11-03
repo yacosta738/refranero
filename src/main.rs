@@ -1,12 +1,15 @@
 //! Refranero command-line interface with a local-first cache and background refresh.
 mod domain;
 mod ingest;
+mod presentation;
 mod refresh;
+mod session;
 mod store;
 
 use anyhow::{bail, Context, Result};
 use clap::{Parser, Subcommand};
 use domain::Category;
+use std::io::IsTerminal;
 #[cfg(windows)]
 use std::os::windows::process::CommandExt;
 use std::path::PathBuf;
@@ -40,6 +43,12 @@ struct Cli {
     /// Open the selected item's source URL in the default web browser.
     #[arg(long, global = true)]
     browser: bool,
+    /// Colorize terminal output: auto, always or never.
+    #[arg(long, global = true, value_enum, default_value_t = presentation::ColorMode::Auto)]
+    color: presentation::ColorMode,
+    /// Print once and exit instead of opening the interactive reader.
+    #[arg(long, global = true)]
+    plain: bool,
     #[command(subcommand)]
     command: Option<Command>,
 }
@@ -62,6 +71,9 @@ enum Command {
     RefreshWorker {
         #[arg(long)]
         owner: String,
+        /// Also refresh the Wayback source when it is due.
+        #[arg(long)]
+        wayback: bool,
     },
     /// Explicitly import source pages to the local SQLite catalog.
     Sync {
@@ -104,18 +116,26 @@ fn main() -> Result<()> {
             .join("refranero")
             .join("catalog.sqlite3"),
     };
-    if let Some(Command::RefreshWorker { owner }) = cli.command.as_ref() {
-        return run_refresh_worker(&db, owner);
+    if let Some(Command::RefreshWorker { owner, wayback }) = cli.command.as_ref() {
+        return run_refresh_worker(&db, owner, *wayback);
     }
     let mut store = Store::open(&db)?;
 
     match cli.command.as_ref() {
         None | Some(Command::Random) => {
-            let result = random(&cli, &store);
-            if result.is_ok() {
-                schedule_background_refresh(&cli, &db, &mut store);
+            if interactive_reader(&cli) {
+                // Launch the worker before entering the alternate screen so warnings stay visible
+                // and the catalog keeps updating while the reader is open.
+                schedule_background_refresh(&cli, &db, &mut store, true);
+                session::Session::start(&store, &cli.lang, cli.category, cli.color)
+                    .and_then(|mut session| session.run())
+            } else {
+                let result = random(&cli, &store);
+                if result.is_ok() {
+                    schedule_background_refresh(&cli, &db, &mut store, false);
+                }
+                result
             }
-            result
         }
         Some(Command::Open { id }) => {
             let entry = match id {
@@ -132,7 +152,15 @@ fn main() -> Result<()> {
                     .next()
                     .context("no matching sayings in the local catalog")?,
             };
-            println!("{}\n{}", entry.entry.text, entry.entry.source_url);
+            if cli.json {
+                println!("{}", serde_json::to_string_pretty(&entry)?);
+            } else {
+                let options = presentation::detect(cli.color);
+                println!(
+                    "{}",
+                    presentation::render(std::slice::from_ref(&entry), &options)
+                );
+            }
             webbrowser::open(&entry.entry.source_url)
                 .context("could not open the default web browser")?;
             Ok(())
@@ -168,19 +196,37 @@ fn main() -> Result<()> {
     }
 }
 
-fn schedule_background_refresh(cli: &Cli, db: &std::path::Path, store: &mut Store) {
+fn schedule_background_refresh(
+    cli: &Cli,
+    db: &std::path::Path,
+    store: &mut Store,
+    allow_wayback: bool,
+) {
     if cli.offline {
         return;
     }
     let now = unix_timestamp();
-    let last_refresh = match store.last_successful_refresh() {
-        Ok(value) => value,
+    let virtual_due = match store.last_successful_refresh() {
+        Ok(value) => {
+            refresh::refresh_decision(value, now, false) == refresh::RefreshDecision::Stale
+        }
         Err(error) => {
             eprintln!("Warning: could not check catalog age: {error:#}");
             return;
         }
     };
-    if refresh::refresh_decision(last_refresh, now, false) != refresh::RefreshDecision::Stale {
+    let wayback_due = allow_wayback
+        && match store.last_wayback_refresh() {
+            Ok(value) => {
+                refresh::wayback_refresh_decision(value, now, false)
+                    == refresh::RefreshDecision::Stale
+            }
+            Err(error) => {
+                eprintln!("Warning: could not check Wayback age: {error:#}");
+                return;
+            }
+        };
+    if !virtual_due && !wayback_due {
         return;
     }
     let owner = worker_owner();
@@ -192,7 +238,7 @@ fn schedule_background_refresh(cli: &Cli, db: &std::path::Path, store: &mut Stor
             return;
         }
     }
-    if let Err(error) = spawn_refresh_worker(db, &owner) {
+    if let Err(error) = spawn_refresh_worker(db, &owner, wayback_due) {
         let _ = store.release_refresh_lease(&owner);
         eprintln!("Warning: could not start catalog refresh worker: {error:#}");
     }
@@ -202,7 +248,7 @@ fn worker_owner() -> String {
     format!("{}-{}", std::process::id(), unix_timestamp())
 }
 
-fn spawn_refresh_worker(db: &std::path::Path, owner: &str) -> Result<()> {
+fn spawn_refresh_worker(db: &std::path::Path, owner: &str, wayback: bool) -> Result<()> {
     let executable = std::env::current_exe().context("locating current executable")?;
     let log_path = db.with_extension("refresh.log");
     let log = std::fs::OpenOptions::new()
@@ -216,7 +262,11 @@ fn spawn_refresh_worker(db: &std::path::Path, owner: &str) -> Result<()> {
         .arg(db)
         .arg("refresh-worker")
         .arg("--owner")
-        .arg(owner)
+        .arg(owner);
+    if wayback {
+        command.arg("--wayback");
+    }
+    command
         .stdin(std::process::Stdio::null())
         .stdout(std::process::Stdio::from(log))
         .stderr(std::process::Stdio::from(error_log));
@@ -226,36 +276,97 @@ fn spawn_refresh_worker(db: &std::path::Path, owner: &str) -> Result<()> {
     Ok(())
 }
 
-fn run_refresh_worker(db: &std::path::Path, owner: &str) -> Result<()> {
+fn run_refresh_worker(db: &std::path::Path, owner: &str, allow_wayback: bool) -> Result<()> {
     let mut store = Store::open(db)?;
-    let mut snapshot = Vec::new();
-    let refresh_result = (|| -> Result<()> {
-        for category in Category::all() {
-            let lease_time = unix_timestamp();
-            if !store.renew_refresh_lease(lease_time, owner)? {
-                bail!(
-                    "background refresh lease expired before updating {}",
-                    category.as_str()
-                );
-            }
-            let client = ingest::http_client_with_timeout(std::time::Duration::from_secs(5))?;
-            let entries = ingest::import_virtual(&client, category, 50)?;
-            if entries.is_empty() {
-                bail!(
-                    "no entries parsed from portal category {}; keeping cached catalog",
-                    category.as_str()
-                );
-            }
-            snapshot.extend(entries);
+    let now = unix_timestamp();
+    let virtual_due = refresh::refresh_decision(store.last_successful_refresh()?, now, false)
+        == refresh::RefreshDecision::Stale;
+    let wayback_due = allow_wayback
+        && refresh::wayback_refresh_decision(store.last_wayback_refresh()?, now, false)
+            == refresh::RefreshDecision::Stale;
+    if !virtual_due && !wayback_due {
+        return store.release_refresh_lease(owner);
+    }
+
+    let result = (|| -> Result<()> {
+        if virtual_due {
+            refresh_virtual(&mut store, owner)?;
         }
-        store.replace_virtual_snapshot(&snapshot, unix_timestamp())?;
-        let total = store.count_source("cervantes_virtual")?;
-        eprintln!("Catalog refresh completed with {total} records.");
+        if wayback_due {
+            refresh_wayback(&store, owner)?;
+        }
         Ok(())
     })();
-    let release_result = store.release_refresh_lease(owner);
-    refresh_result?;
-    release_result?;
+    let cleared = store.clear_refresh_progress();
+    let released = store.release_refresh_lease(owner);
+    result?;
+    cleared?;
+    released?;
+    Ok(())
+}
+
+fn publish_progress(store: &Store, phase: &str, done: usize, total: usize) {
+    let _ = store.set_refresh_progress(&store::RefreshProgress {
+        phase: phase.to_owned(),
+        done,
+        total,
+        updated_at: unix_timestamp(),
+    });
+}
+
+fn refresh_virtual(store: &mut Store, owner: &str) -> Result<()> {
+    let categories = Category::all();
+    let total = categories.len();
+    let mut snapshot = Vec::new();
+    for (index, category) in categories.into_iter().enumerate() {
+        if !store.renew_refresh_lease(unix_timestamp(), owner)? {
+            bail!(
+                "background refresh lease expired before updating {}",
+                category.as_str()
+            );
+        }
+        publish_progress(store, "Cervantes Virtual", index, total);
+        let client = ingest::http_client_with_timeout(std::time::Duration::from_secs(5))?;
+        let entries = ingest::import_virtual(&client, category, 50)?;
+        if entries.is_empty() {
+            bail!(
+                "no entries parsed from portal category {}; keeping cached catalog",
+                category.as_str()
+            );
+        }
+        snapshot.extend(entries);
+    }
+    publish_progress(store, "Cervantes Virtual", total, total);
+    store.replace_virtual_snapshot(&snapshot, unix_timestamp())?;
+    let count = store.count_source("cervantes_virtual")?;
+    eprintln!("Cervantes Virtual refresh completed with {count} records.");
+    Ok(())
+}
+
+fn refresh_wayback(store: &Store, owner: &str) -> Result<()> {
+    let letter = refresh::next_letter(store.wayback_cursor()?);
+    let phase = format!("Wayback {letter}");
+    let client = ingest::http_client_with_timeout(std::time::Duration::from_secs(5))?;
+    let report = ingest::import_wayback_with_progress(
+        &client,
+        letter,
+        refresh::year_from_unix(unix_timestamp()),
+        refresh::AUTOMATIC_WAYBACK_LIMIT,
+        |done, total| {
+            let _ = store.renew_refresh_lease(unix_timestamp(), owner);
+            publish_progress(store, &phase, done, total);
+        },
+    )?;
+    if report.entries.is_empty() {
+        bail!("no CVC fichas discovered in the archived index for letter {letter}");
+    }
+    let inserted = store.insert_wayback(&report.entries, &report.captured_spanish_pars)?;
+    store.record_wayback_refresh(unix_timestamp())?;
+    store.set_wayback_cursor(letter)?;
+    eprintln!(
+        "Wayback {letter} refresh: {} roots, {inserted} new entries.",
+        report.roots_processed
+    );
     Ok(())
 }
 
@@ -264,6 +375,15 @@ fn unix_timestamp() -> i64 {
         .duration_since(std::time::UNIX_EPOCH)
         .map(|duration| duration.as_secs() as i64)
         .unwrap_or_default()
+}
+
+fn interactive_reader(cli: &Cli) -> bool {
+    !cli.plain
+        && !cli.json
+        && !cli.browser
+        && cli.count == 1
+        && std::io::stdin().is_terminal()
+        && std::io::stdout().is_terminal()
 }
 
 fn random(cli: &Cli, store: &Store) -> Result<()> {
@@ -283,14 +403,8 @@ fn random(cli: &Cli, store: &Store) -> Result<()> {
     if cli.json {
         println!("{}", serde_json::to_string_pretty(&sayings)?);
     } else {
-        for saying in &sayings {
-            println!("\n“{}”", saying.entry.text);
-            println!(
-                "  [{} · {} · #{}]",
-                saying.entry.category, saying.entry.source, saying.id
-            );
-            println!("  {}", saying.entry.source_url);
-        }
+        let options = presentation::detect(cli.color);
+        println!("{}", presentation::render(&sayings, &options));
     }
     if cli.browser {
         for saying in &sayings {
