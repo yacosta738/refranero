@@ -130,8 +130,8 @@ there are no other versions. Use `--lang` to browse another language.
 
 The reader is skipped, and the command prints once, when `stdout` is redirected,
 `stdin` is not a terminal, `--json` is set, `--count` is above 1, `--browser` is
-set, or `--plain` is passed. Redirected output never contains escape sequences,
-so it stays usable in scripts.
+set, or `--plain` is passed. Redirected output contains no escape sequences unless
+`--color always` is set, so it stays usable in scripts.
 
 ## Common use cases
 
@@ -199,9 +199,10 @@ Terminal capabilities also change the output:
 
 - Stored text is printed with control characters, terminal escape sequences and
   bidi overrides removed. Stored records are not modified.
-- Interactive terminals show `↗ Consultar fuente` as an OSC 8 hyperlink. Other
-  outputs print the full URL on its own line, never wrapped, so it stays
-  copyable.
+- Interactive terminals show `↗ Consultar fuente` as an OSC 8 hyperlink. The
+  reader omits a URL wider than the terminal; `o` opens the source. One-shot and
+  redirected outputs with hyperlinks disabled print the full URL on its own line,
+  never wrapped, so it stays copyable.
 - `NO_COLOR` set to a non-empty value disables styling and hyperlinks.
 - `--json` never changes: no colors, no headers, no extra characters.
 
@@ -273,8 +274,8 @@ running.
 Refresh output is appended to a `catalog.refresh.log` file next to the SQLite
 database. While the reader is open, the worker publishes its progress and the
 reader draws a status bar with the phase, a block bar, the percentage and the
-completed units. The catalog runs in WAL mode, so reading continues while the
-worker commits.
+completed units. The catalog runs in WAL mode when the filesystem supports it;
+otherwise readers can wait up to five seconds while the worker commits.
 
 Current-portal entries use the per-entry reference in the page's `blockquote`
 `cite` attribute. Refranero validates the host and upgrades HTTP references to
