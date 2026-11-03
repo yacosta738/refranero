@@ -1,0 +1,11 @@
+{
+  "globs": [
+    "*.md",
+    ".agents/**/*.md",
+    ".github/*.md"
+  ],
+  "ignores": [
+    ".agents/rpi/**",
+    "CHANGELOG.md"
+  ]
+}

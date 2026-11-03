@@ -1,0 +1,19 @@
+{
+  "name": "refranero",
+  "private": true,
+  "packageManager": "pnpm@12.14.0",
+  "engines": {
+    "node": ">=24"
+  },
+  "scripts": {
+    "prepare": "lefthook install",
+    "lint:md": "markdownlint-cli2",
+    "lint:commit": "commitlint --edit"
+  },
+  "devDependencies": {
+    "@commitlint/cli": "21.2.4",
+    "@commitlint/config-conventional": "21.2.4",
+    "lefthook": "2.2.1",
+    "markdownlint-cli2": "0.24.0"
+  }
+}
