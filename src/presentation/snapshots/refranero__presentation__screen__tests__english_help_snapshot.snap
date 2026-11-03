@@ -1,0 +1,24 @@
+---
+source: src/presentation/screen.rs
+expression: compose(&options)
+---
+
+
+
+
+
+  SHORTCUTS
+  ────────────────────────────────────────
+
+  n / Enter / Space     Another saying
+  l / →                 Next language or variant
+  h / ←                 Previous language or variant
+  c                     Next category
+  o                     Open the source
+  ?                     Close this help
+  q / Esc               Quit
+
+
+
+
+  n next · o open · l/h language · c category · ? help · q quit

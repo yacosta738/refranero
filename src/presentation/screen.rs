@@ -7,7 +7,9 @@ use textwrap::core::display_width;
 
 use crate::domain::Saying;
 
-use super::{renderer, renderer::LanguageStrip, theme::Theme, RenderOptions};
+use super::{
+    renderer, renderer::LanguageStrip, theme::Theme, Catalog, Message, RenderOptions, UiLanguage,
+};
 
 /// Everything needed to compose one frame.
 pub struct Screen<'a> {
@@ -33,6 +35,8 @@ pub struct Screen<'a> {
     pub color: bool,
     /// OSC 8 hyperlinks enabled.
     pub links: bool,
+    /// Language used for interface text.
+    pub language: UiLanguage,
 }
 
 /// Background refresh status for the status bar.
@@ -51,9 +55,10 @@ pub fn compose(screen: &Screen<'_>) -> String {
     let width = screen.width.max(24);
     let height = screen.height.max(8);
     let theme = Theme::new(screen.color);
+    let catalog = Catalog::new(screen.language);
 
     let mut content = if screen.help {
-        help_lines(&theme, width)
+        help_lines(&theme, width, catalog)
     } else {
         entry_lines(screen)
     };
@@ -80,7 +85,12 @@ pub fn compose(screen: &Screen<'_>) -> String {
     if let Some(progress) = screen.progress.as_ref() {
         frame.push(progress_line(progress, width, &theme));
     }
-    frame.push(footer(width, screen.next_language.as_deref(), &theme));
+    frame.push(footer(
+        width,
+        screen.next_language.as_deref(),
+        &theme,
+        catalog,
+    ));
     frame.join("\n")
 }
 
@@ -90,6 +100,7 @@ fn entry_lines(screen: &Screen<'_>) -> Vec<String> {
         color: screen.color,
         links: screen.links,
         interactive: true,
+        language: screen.language,
     };
     let strip = screen
         .languages_label
@@ -114,32 +125,44 @@ fn entry_lines(screen: &Screen<'_>) -> Vec<String> {
         .collect()
 }
 
-fn help_lines(theme: &Theme, width: usize) -> Vec<String> {
-    let rows: &[(&str, &str)] = if width < 44 {
-        &[
-            ("n", "otro"),
-            ("l", "idioma"),
-            ("h", "anterior"),
-            ("c", "categoría"),
-            ("o", "abrir"),
-            ("?", "cerrar"),
-            ("q", "salir"),
+fn help_lines(theme: &Theme, width: usize, catalog: Catalog) -> Vec<String> {
+    let rows: Vec<(&str, &str)> = if width < 44 {
+        vec![
+            ("n", catalog.text(Message::HelpNextShort)),
+            ("l", catalog.text(Message::HelpLanguageShort)),
+            ("h", catalog.text(Message::HelpPreviousShort)),
+            ("c", catalog.text(Message::HelpCategoryShort)),
+            ("o", catalog.text(Message::HelpOpenShort)),
+            ("?", catalog.text(Message::HelpCloseShort)),
+            ("q", catalog.text(Message::HelpQuitShort)),
         ]
     } else {
-        &[
-            ("n / Enter / Espacio", "Otro refrán"),
-            ("l / →", "Siguiente idioma o variante"),
-            ("h / ←", "Idioma o variante anterior"),
-            ("c", "Siguiente categoría"),
-            ("o", "Abrir la fuente"),
-            ("?", "Cerrar esta ayuda"),
-            ("q / Esc", "Salir"),
+        vec![
+            (
+                catalog.text(Message::HelpNextKeys),
+                catalog.text(Message::HelpNextLong),
+            ),
+            (
+                catalog.text(Message::HelpNextLanguageKeys),
+                catalog.text(Message::HelpNextLanguageLong),
+            ),
+            (
+                catalog.text(Message::HelpPreviousLanguageKeys),
+                catalog.text(Message::HelpPreviousLanguageLong),
+            ),
+            ("c", catalog.text(Message::HelpCategoryLong)),
+            ("o", catalog.text(Message::HelpOpenLong)),
+            ("?", catalog.text(Message::HelpCloseLong)),
+            (
+                catalog.text(Message::HelpQuitKeys),
+                catalog.text(Message::HelpQuitLong),
+            ),
         ]
     };
 
     let mut lines = vec![
         String::new(),
-        format!("  {}", theme.eyebrow("ATAJOS")),
+        format!("  {}", theme.eyebrow(catalog.text(Message::HelpTitle))),
         format!(
             "  {}",
             theme.rule(&"─".repeat(width.saturating_sub(4).min(40)))
@@ -205,16 +228,39 @@ fn clip(text: &str, width: usize) -> String {
     clipped
 }
 
-fn footer(width: usize, next_language: Option<&str>, theme: &Theme) -> String {
+fn footer(width: usize, next_language: Option<&str>, theme: &Theme, catalog: Catalog) -> String {
     let language = next_language.map_or_else(
-        || "l/h idioma".to_owned(),
-        |code| format!("l/h idioma→{code}"),
+        || catalog.text(Message::FooterLanguage).to_owned(),
+        |code| format!("{}→{code}", catalog.text(Message::FooterLanguage)),
     );
     let candidates = [
-        format!("n otro · o abrir · {language} · c categoría · ? ayuda · q salir"),
-        format!("n otro · o abrir · {language} · ? ayuda · q salir"),
-        "n otro · o abrir · l/h idioma · q salir".to_owned(),
-        "n otro · o abrir · l/h · ? · q".to_owned(),
+        format!(
+            "{} · {} · {language} · {} · {} · {}",
+            catalog.text(Message::FooterNext),
+            catalog.text(Message::FooterOpen),
+            catalog.text(Message::FooterCategory),
+            catalog.text(Message::FooterHelp),
+            catalog.text(Message::FooterQuit)
+        ),
+        format!(
+            "{} · {} · {language} · {} · {}",
+            catalog.text(Message::FooterNext),
+            catalog.text(Message::FooterOpen),
+            catalog.text(Message::FooterHelp),
+            catalog.text(Message::FooterQuit)
+        ),
+        format!(
+            "{} · {} · {} · {}",
+            catalog.text(Message::FooterNext),
+            catalog.text(Message::FooterOpen),
+            catalog.text(Message::FooterLanguage),
+            catalog.text(Message::FooterQuit)
+        ),
+        format!(
+            "{} · {} · l/h · ? · q",
+            catalog.text(Message::FooterNext),
+            catalog.text(Message::FooterOpen)
+        ),
         "n·o·l/h·?·q".to_owned(),
     ];
     let budget = width.saturating_sub(2);
@@ -231,6 +277,7 @@ mod tests {
     use textwrap::core::display_width;
 
     use super::{compose, Saying, Screen};
+    use crate::presentation::UiLanguage;
 
     const URL: &str =
         "https://www.cervantesvirtual.com/obra-visor/refranes-alusivos-al-tiempo/html/";
@@ -264,6 +311,15 @@ mod tests {
             progress: None,
             color: false,
             links: false,
+            language: UiLanguage::Spanish,
+        }
+    }
+
+    /// Screen for a given interface language.
+    fn screen_in(saying: &Saying, width: usize, height: usize, language: UiLanguage) -> Screen<'_> {
+        Screen {
+            language,
+            ..screen(saying, width, height)
         }
     }
 
@@ -467,5 +523,74 @@ mod tests {
         let mut options = screen(&entry, 80, 20);
         options.help = true;
         insta::assert_snapshot!(compose(&options));
+    }
+
+    #[test]
+    fn english_help_snapshot() {
+        let entry = saying("Más vale tarde que nunca.");
+        let mut options = screen_in(&entry, 80, 20, UiLanguage::English);
+        options.help = true;
+        insta::assert_snapshot!(compose(&options));
+    }
+
+    #[test]
+    fn english_interactive_screen_snapshot() {
+        let entry = saying(
+            "Por muchas vueltas que dieron los sastres no sacaron el antruejo (carnaval) del martes.",
+        );
+        let mut options = screen_in(&entry, 80, 24, UiLanguage::English);
+        options.next_language = Some("ca".to_owned());
+        insta::assert_snapshot!(compose(&options));
+    }
+
+    #[test]
+    fn english_footer_names_the_shortcuts_in_english() {
+        let entry = saying("Más vale tarde que nunca.");
+        let mut options = screen_in(&entry, 80, 24, UiLanguage::English);
+        options.next_language = Some("ca".to_owned());
+        let frame = compose(&options);
+        assert!(
+            frame.contains("n next · o open · l/h language→ca"),
+            "{frame}"
+        );
+    }
+
+    #[test]
+    fn english_footer_adapts_to_narrow_terminals() {
+        let entry = saying("Más vale tarde que nunca.");
+        for width in [24, 32, 44] {
+            let mut options = screen_in(&entry, width, 12, UiLanguage::English);
+            options.next_language = Some("ca".to_owned());
+            let frame = compose(&options);
+            assert_exact_height(&frame, 12);
+            assert_fits(&frame, width);
+            assert!(
+                frame.contains("n·o·l/h·?·q") || frame.contains("n next"),
+                "{frame}"
+            );
+        }
+    }
+
+    #[test]
+    fn english_help_lists_the_shortcuts_in_english() {
+        let entry = saying("Más vale tarde que nunca.");
+        let mut options = screen_in(&entry, 80, 20, UiLanguage::English);
+        options.help = true;
+        let frame = compose(&options);
+        assert!(frame.contains("SHORTCUTS"), "{frame}");
+        assert!(frame.contains("Another saying"), "{frame}");
+        assert!(frame.contains("Open the source"), "{frame}");
+    }
+
+    #[test]
+    fn spanish_footer_stays_the_default() {
+        let entry = saying("Más vale tarde que nunca.");
+        let mut options = screen(&entry, 80, 24);
+        options.next_language = Some("ca".to_owned());
+        let frame = compose(&options);
+        assert!(
+            frame.contains("n otro · o abrir · l/h idioma→ca"),
+            "{frame}"
+        );
     }
 }

@@ -4,6 +4,7 @@
 //! environment, the network or the catalog. Terminal capabilities are resolved once in
 //! [`detect`], so layouts stay deterministic and snapshot-testable.
 
+mod i18n;
 mod label;
 mod renderer;
 mod sanitize;
@@ -11,7 +12,7 @@ mod screen;
 mod terminal;
 mod theme;
 
-pub use label::{category as category_name, language as language_name};
+pub use i18n::{resolve_ui_language, Catalog, Message, UiLanguage};
 pub use renderer::render;
 pub use screen::{compose, ProgressView, Screen};
 pub use terminal::{detect, ColorMode};
@@ -27,6 +28,8 @@ pub struct RenderOptions {
     pub links: bool,
     /// Decorate the output; plain output stays machine-friendly.
     pub interactive: bool,
+    /// Language used for interface labels.
+    pub language: UiLanguage,
 }
 
 impl RenderOptions {
@@ -37,6 +40,7 @@ impl RenderOptions {
             color: false,
             links: false,
             interactive: false,
+            language: UiLanguage::Spanish,
         }
     }
 }

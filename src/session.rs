@@ -13,7 +13,9 @@ use crossterm::terminal::{self, Clear, ClearType, EnterAlternateScreen, LeaveAlt
 use crossterm::{execute, queue};
 
 use crate::domain::{Category, Saying};
-use crate::presentation::{self, compose, ColorMode, ProgressView, Screen};
+use crate::presentation::{
+    self, compose, Catalog, ColorMode, Message, ProgressView, Screen, UiLanguage,
+};
 use crate::store::Store;
 
 const DEFAULT_CATEGORY: &str = "refran";
@@ -46,6 +48,7 @@ pub struct Session<'a> {
     dirty: bool,
     color: bool,
     links: bool,
+    catalog: Catalog,
 }
 
 impl<'a> Session<'a> {
@@ -55,6 +58,7 @@ impl<'a> Session<'a> {
         language: &str,
         category: Option<Category>,
         color_mode: ColorMode,
+        ui_language: UiLanguage,
     ) -> Result<Self> {
         let category = category
             .map(|value| value.as_str().to_owned())
@@ -64,7 +68,7 @@ impl<'a> Session<'a> {
             .into_iter()
             .next()
             .with_context(|| format!("no local entries for lang={language} category={category}"))?;
-        Self::with_current(store, current, Some(category), color_mode)
+        Self::with_current(store, current, Some(category), color_mode, ui_language)
     }
 
     fn with_current(
@@ -72,6 +76,7 @@ impl<'a> Session<'a> {
         current: Saying,
         category: Option<String>,
         color_mode: ColorMode,
+        ui_language: UiLanguage,
     ) -> Result<Self> {
         let options = presentation::detect(color_mode);
         let observed_refresh = store.last_successful_refresh()?;
@@ -90,6 +95,7 @@ impl<'a> Session<'a> {
             dirty: true,
             color: options.color,
             links: options.links,
+            catalog: Catalog::new(ui_language),
         };
         session.reload_variants()?;
         Ok(session)
@@ -168,6 +174,7 @@ impl<'a> Session<'a> {
             progress: self.progress.clone(),
             color: self.color,
             links: self.links,
+            language: self.catalog.language(),
         });
         queue!(stdout, MoveTo(0, 0), Clear(ClearType::All))?;
         for (index, line) in frame.lines().enumerate() {
@@ -192,7 +199,11 @@ impl<'a> Session<'a> {
                 unix_now().saturating_sub(progress.updated_at) <= PROGRESS_TTL_SECONDS
             })
             .map(|progress| ProgressView {
-                label: format!("Actualizando {}", progress.phase),
+                label: format!(
+                    "{} {}",
+                    self.catalog.text(Message::ProgressUpdating),
+                    progress.phase
+                ),
                 done: progress.done,
                 total: progress.total,
             });
@@ -218,7 +229,7 @@ impl<'a> Session<'a> {
         }
         self.observed_refresh = virtual_latest;
         self.observed_wayback = wayback_latest;
-        self.message = Some("Catálogo actualizado".to_owned());
+        self.message = Some(self.catalog.text(Message::CatalogUpdated).to_owned());
         self.dirty = true;
     }
 
@@ -230,11 +241,14 @@ impl<'a> Session<'a> {
                 .map(|saying| saying.entry.language.clone())
                 .collect();
             spanish_first(&mut codes);
-            (Some("Otros idiomas".to_owned()), codes)
+            (
+                Some(self.catalog.text(Message::StripOtherLanguages).to_owned()),
+                codes,
+            )
         } else {
             // A single-language entry still shows its language: nothing to hide.
             (
-                Some("Idioma".to_owned()),
+                Some(self.catalog.text(Message::StripLanguage).to_owned()),
                 vec![self.current.entry.language.clone()],
             )
         }
@@ -269,26 +283,22 @@ impl<'a> Session<'a> {
             self.message = None;
             self.reload_variants()?;
         } else {
-            self.message = Some("No hay más refranes con este filtro".to_owned());
+            self.message = Some(self.catalog.text(Message::NoMoreEntries).to_owned());
         }
         Ok(())
     }
 
     fn cycle_language(&mut self, direction: isize) -> Result<()> {
         if self.variants.len() < 2 {
-            self.message = Some(format!(
-                "Este refrán solo está en {}",
-                presentation::language_name(&self.current.entry.language)
-            ));
+            let language = self.catalog.language_name(&self.current.entry.language);
+            self.message = Some(self.catalog.format(Message::OnlyInLanguage, &language));
             return Ok(());
         }
         let len = self.variants.len() as isize;
         self.variant_index = (self.variant_index as isize + direction).rem_euclid(len) as usize;
         self.current = self.variants[self.variant_index].clone();
-        self.message = Some(format!(
-            "Idioma: {}",
-            presentation::language_name(&self.current.entry.language)
-        ));
+        let language = self.catalog.language_name(&self.current.entry.language);
+        self.message = Some(self.catalog.format(Message::CurrentLanguage, &language));
         Ok(())
     }
 
@@ -311,18 +321,21 @@ impl<'a> Session<'a> {
                 self.category = Some(next.to_owned());
                 self.current = saying;
                 self.reload_variants()?;
-                self.message = Some(format!("Categoría: {}", presentation::category_name(next)));
+                let category = self.catalog.category(next);
+                self.message = Some(self.catalog.format(Message::CurrentCategory, &category));
                 return Ok(());
             }
         }
-        self.message = Some("Sin entradas en otras categorías para este idioma".to_owned());
+        self.message = Some(self.catalog.text(Message::NoOtherCategories).to_owned());
         Ok(())
     }
 
     fn open_source(&mut self) {
         self.message = Some(match webbrowser::open(&self.current.entry.source_url) {
-            Ok(()) => "Fuente abierta en el navegador".to_owned(),
-            Err(error) => format!("No se pudo abrir la fuente: {error}"),
+            Ok(()) => self.catalog.text(Message::SourceOpened).to_owned(),
+            Err(error) => self
+                .catalog
+                .format(Message::SourceOpenFailed, &error.to_string()),
         });
     }
 }
@@ -386,7 +399,7 @@ mod tests {
     use std::path::Path;
 
     use super::Session;
-    use crate::presentation::ColorMode;
+    use crate::presentation::{ColorMode, Message, UiLanguage};
     use crate::store::{RefreshProgress, Store};
 
     fn store() -> Store {
@@ -396,7 +409,8 @@ mod tests {
     #[test]
     fn starts_with_a_matching_entry() {
         let store = store();
-        let session = Session::start(&store, "es", None, ColorMode::Never).unwrap();
+        let session =
+            Session::start(&store, "es", None, ColorMode::Never, UiLanguage::Spanish).unwrap();
         assert_eq!(session.current.entry.language, "es");
         assert_eq!(session.category.as_deref(), Some("refran"));
     }
@@ -410,9 +424,14 @@ mod tests {
             .into_iter()
             .find(|saying| saying.entry.language == "ca")
             .unwrap();
-        let mut session =
-            Session::with_current(&store, catalan, Some("refran".to_owned()), ColorMode::Never)
-                .unwrap();
+        let mut session = Session::with_current(
+            &store,
+            catalan,
+            Some("refran".to_owned()),
+            ColorMode::Never,
+            UiLanguage::Spanish,
+        )
+        .unwrap();
         assert_eq!(session.variants.len(), 2);
         assert_eq!(session.next_language().as_deref(), Some("en"));
 
@@ -433,9 +452,14 @@ mod tests {
             .into_iter()
             .find(|saying| saying.entry.language == "ca")
             .unwrap();
-        let session =
-            Session::with_current(&store, catalan, Some("refran".to_owned()), ColorMode::Never)
-                .unwrap();
+        let session = Session::with_current(
+            &store,
+            catalan,
+            Some("refran".to_owned()),
+            ColorMode::Never,
+            UiLanguage::Spanish,
+        )
+        .unwrap();
         let (label, codes) = session.language_strip();
         assert_eq!(label.as_deref(), Some("Otros idiomas"));
         assert_eq!(codes, ["ca", "en"]);
@@ -450,9 +474,14 @@ mod tests {
             .into_iter()
             .find(|saying| saying.entry.group_id.is_none())
             .unwrap();
-        let session =
-            Session::with_current(&store, spanish, Some("refran".to_owned()), ColorMode::Never)
-                .unwrap();
+        let session = Session::with_current(
+            &store,
+            spanish,
+            Some("refran".to_owned()),
+            ColorMode::Never,
+            UiLanguage::Spanish,
+        )
+        .unwrap();
         let (label, codes) = session.language_strip();
         assert_eq!(label.as_deref(), Some("Idioma"));
         assert_eq!(codes, ["es"]);
@@ -468,9 +497,14 @@ mod tests {
             .find(|saying| saying.entry.group_id.is_none())
             .unwrap();
         let original = spanish.id;
-        let mut session =
-            Session::with_current(&store, spanish, Some("refran".to_owned()), ColorMode::Never)
-                .unwrap();
+        let mut session = Session::with_current(
+            &store,
+            spanish,
+            Some("refran".to_owned()),
+            ColorMode::Never,
+            UiLanguage::Spanish,
+        )
+        .unwrap();
 
         session.cycle_language(1).unwrap();
         assert_eq!(session.current.id, original);
@@ -488,9 +522,41 @@ mod tests {
     }
 
     #[test]
+    fn english_session_messages_and_strip_labels_are_localized() {
+        let store = store();
+        let saying = store
+            .random("es", Some("refran"), 20)
+            .unwrap()
+            .into_iter()
+            .find(|saying| saying.entry.group_id.is_none())
+            .unwrap();
+        let mut session = Session::with_current(
+            &store,
+            saying,
+            Some("refran".to_owned()),
+            ColorMode::Never,
+            UiLanguage::English,
+        )
+        .unwrap();
+
+        assert_eq!(session.language_strip().0.as_deref(), Some("Language"));
+        session.cycle_language(1).unwrap();
+        assert!(session
+            .message
+            .as_deref()
+            .is_some_and(|message| message.contains("only available in Spanish")));
+        session.poll_generation();
+        assert_eq!(
+            session.catalog.text(Message::CatalogUpdated),
+            "Catalog updated"
+        );
+    }
+
+    #[test]
     fn cycles_categories_that_have_entries() {
         let store = store();
-        let mut session = Session::start(&store, "es", None, ColorMode::Never).unwrap();
+        let mut session =
+            Session::start(&store, "es", None, ColorMode::Never, UiLanguage::Spanish).unwrap();
         session.cycle_category().unwrap();
         assert_eq!(session.category.as_deref(), Some("proverbio"));
         assert_eq!(session.current.entry.category, "proverbio");
@@ -505,9 +571,14 @@ mod tests {
             .into_iter()
             .next()
             .unwrap();
-        let mut session =
-            Session::with_current(&store, dicho, Some("dicho".to_owned()), ColorMode::Never)
-                .unwrap();
+        let mut session = Session::with_current(
+            &store,
+            dicho,
+            Some("dicho".to_owned()),
+            ColorMode::Never,
+            UiLanguage::Spanish,
+        )
+        .unwrap();
 
         session.cycle_category().unwrap();
         assert_ne!(session.category.as_deref(), Some("dicho"));
@@ -540,9 +611,14 @@ mod tests {
             .into_iter()
             .next()
             .unwrap();
-        let mut session =
-            Session::with_current(&reader, saying, Some("refran".to_owned()), ColorMode::Never)
-                .unwrap();
+        let mut session = Session::with_current(
+            &reader,
+            saying,
+            Some("refran".to_owned()),
+            ColorMode::Never,
+            UiLanguage::Spanish,
+        )
+        .unwrap();
         assert!(session.progress.is_none());
 
         writer
@@ -604,9 +680,14 @@ mod tests {
             .into_iter()
             .next()
             .unwrap();
-        let mut session =
-            Session::with_current(&reader, saying, Some("refran".to_owned()), ColorMode::Never)
-                .unwrap();
+        let mut session = Session::with_current(
+            &reader,
+            saying,
+            Some("refran".to_owned()),
+            ColorMode::Never,
+            UiLanguage::Spanish,
+        )
+        .unwrap();
 
         session.poll_refresh();
         assert!(session.message.is_none(), "{:?}", session.message);

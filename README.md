@@ -364,6 +364,9 @@ always requests remote pages.
   The default is `refran`.
 - `--lang <CODE>`: filter by language code, such as `es`, `en`, or `ca`. The
   default is `es`.
+- `--ui-lang <es|en>`: select the interface language independently from `--lang`.
+  The default follows `LC_ALL`, `LC_MESSAGES`, then `LANG` when the locale is
+  English or Spanish; otherwise it is Spanish.
 - `--json`: print random results as JSON instead of terminal-friendly text.
 - `--color <auto|always|never>`: control ANSI styling. The default is `auto`.
 - `--plain`: print once and exit instead of opening the interactive reader.
