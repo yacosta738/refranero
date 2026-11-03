@@ -1,0 +1,74 @@
+# =============================================================================
+# Lefthook configuration for refranero
+# =============================================================================
+# Universal install (any OS):
+#   npx lefthook@latest install
+#
+# Or via pnpm (after `pnpm install`):
+#   pnpm exec lefthook install
+#
+# Or via curl (standalone):
+#   curl -fsSL https://raw.githubusercontent.com/evilmartians/lefthook/master/bin/lefthook_darwin_amd64 -o /usr/local/bin/lefthook && chmod +x /usr/local/bin/lefthook
+# =============================================================================
+
+# =============================================================================
+# Hooks
+# =============================================================================
+
+pre-commit:
+  parallel: true
+  commands:
+    fmt:
+      run: cargo fmt --all
+      glob: "*.rs"
+      stage_fixed: true
+
+    clippy:
+      run: cargo clippy --all-targets -- -D warnings
+      glob: "*.{rs,toml}"
+
+    markdown:
+      run: pnpm exec markdownlint-cli2
+      glob: "*.md"
+
+    node-syntax:
+      run: node --check npm/wrapper/bin/refranero.mjs && node --check scripts/prepare-npm.mjs
+      glob: "{npm/wrapper/bin/*.mjs,scripts/*.mjs}"
+
+pre-push:
+  parallel: false
+  commands:
+    # GitGuardian (ggshield): scan commits about to be pushed for secrets
+    # https://docs.gitguardian.com/ggshield-docs/integrations/git-hooks/pre-push
+    ggshield:
+      run: 'if command -v ggshield >/dev/null 2>&1; then ggshield secret scan pre-push "$@"; else echo "ggshield not installed, skipping pre-push scan"; fi'
+      fail_text: "GitGuardian secret scan found potential secrets. Inspect findings before pushing."
+
+    clippy:
+      run: cargo clippy --all-targets -- -D warnings
+
+    test:
+      run: cargo test --all-targets
+
+    npm-check:
+      run: node --test tests/npm-packaging.test.mjs && (cd npm/wrapper && npm pack --dry-run)
+
+commit-msg:
+  commands:
+    commitlint:
+      run: pnpm exec commitlint --edit {1}
+
+post-checkout:
+  commands:
+    agentsync:
+      run: pnpm dlx @dallay/agentsync@latest apply || true
+
+post-merge:
+  commands:
+    agentsync:
+      run: pnpm dlx @dallay/agentsync@latest apply || true
+
+post-rewrite:
+  commands:
+    agentsync:
+      run: pnpm dlx @dallay/agentsync@latest apply || true

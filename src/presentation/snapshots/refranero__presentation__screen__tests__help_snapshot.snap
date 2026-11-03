@@ -1,0 +1,24 @@
+---
+source: src/presentation/screen.rs
+expression: compose(&options)
+---
+
+
+
+
+
+  ATAJOS
+  ────────────────────────────────────────
+
+  n / Enter / Espacio   Otro refrán
+  l / →                 Siguiente idioma o variante
+  h / ←                 Idioma o variante anterior
+  c                     Siguiente categoría
+  o                     Abrir la fuente
+  ?                     Cerrar esta ayuda
+  q / Esc               Salir
+
+
+
+
+  n otro · o abrir · l/h idioma · c categoría · ? ayuda · q salir

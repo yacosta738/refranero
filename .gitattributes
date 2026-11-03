@@ -1,0 +1,2 @@
+# Keep working trees stable across platforms. rustfmt enforces Unix newlines.
+* text=auto eol=lf

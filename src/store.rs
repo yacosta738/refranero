@@ -2,12 +2,25 @@
 use crate::domain::{NewSaying, Saying};
 use anyhow::{bail, Context, Result};
 use rusqlite::{params, Connection, OptionalExtension, TransactionBehavior};
+use serde::{Deserialize, Serialize};
 use std::collections::HashSet;
 use std::path::Path;
 
 // Increment when a later release changes the bundled source-link mappings.
 const SOURCE_LINK_MIGRATION_KEY: &str = "source_link_migration_version";
 const SOURCE_LINK_MIGRATION_VERSION: &str = "1";
+const REFRESH_PROGRESS_KEY: &str = "refresh_progress";
+const WAYBACK_REFRESH_KEY: &str = "last_wayback_refresh";
+const WAYBACK_CURSOR_KEY: &str = "wayback_cursor";
+
+/// Progress of the background refresh, published by the worker for the reader.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct RefreshProgress {
+    pub phase: String,
+    pub done: usize,
+    pub total: usize,
+    pub updated_at: i64,
+}
 
 /// Owns an initialized SQLite connection.
 pub struct Store {
@@ -23,6 +36,11 @@ impl Store {
         }
         let connection =
             Connection::open(path).with_context(|| format!("opening {}", path.display()))?;
+        // WAL lets the interactive reader keep working while the refresh worker commits; the
+        // timeout absorbs the short write windows. WAL is unavailable on some filesystems, so the
+        // fallback to the rollback journal must not abort the command.
+        let _ = connection.execute_batch("PRAGMA journal_mode = WAL;");
+        connection.execute_batch("PRAGMA busy_timeout = 5000;")?;
         connection.execute_batch(
             "CREATE TABLE IF NOT EXISTS sayings (
                id INTEGER PRIMARY KEY,
@@ -179,6 +197,85 @@ impl Store {
             "INSERT INTO metadata(key, value) VALUES ('last_successful_refresh', ?1)
              ON CONFLICT(key) DO UPDATE SET value = excluded.value",
             [timestamp.to_string()],
+        )?;
+        Ok(())
+    }
+
+    /// Timestamp of the last successful Wayback refresh.
+    pub fn last_wayback_refresh(&self) -> Result<Option<i64>> {
+        self.metadata(WAYBACK_REFRESH_KEY)?
+            .map(|value| {
+                value
+                    .parse::<i64>()
+                    .context("invalid last_wayback_refresh timestamp")
+            })
+            .transpose()
+    }
+
+    /// Record a successful Wayback run and the processed letter in one transaction.
+    pub fn record_wayback_success(&mut self, letter: char, timestamp: i64) -> Result<()> {
+        let transaction = self.connection.transaction()?;
+        for (key, value) in [
+            (WAYBACK_REFRESH_KEY, timestamp.to_string()),
+            (WAYBACK_CURSOR_KEY, letter.to_string()),
+        ] {
+            transaction.execute(
+                "INSERT INTO metadata(key, value) VALUES (?1, ?2)
+                 ON CONFLICT(key) DO UPDATE SET value = excluded.value",
+                params![key, value],
+            )?;
+        }
+        transaction.commit()?;
+        Ok(())
+    }
+
+    /// Letter the automatic Wayback job should process next.
+    pub fn wayback_cursor(&self) -> Result<Option<char>> {
+        Ok(self
+            .metadata(WAYBACK_CURSOR_KEY)?
+            .and_then(|value| value.chars().next()))
+    }
+
+    /// Publish refresh progress for the interactive reader.
+    pub fn set_refresh_progress(&self, progress: &RefreshProgress) -> Result<()> {
+        let value = serde_json::to_string(progress)?;
+        self.set_metadata(REFRESH_PROGRESS_KEY, &value)
+    }
+
+    /// Read the latest refresh progress. Corrupt or missing values read as `None`.
+    pub fn refresh_progress(&self) -> Result<Option<RefreshProgress>> {
+        let Some(value) = self.metadata(REFRESH_PROGRESS_KEY)? else {
+            return Ok(None);
+        };
+        Ok(serde_json::from_str(&value).ok())
+    }
+
+    /// Remove published progress, but only while `owner` still holds the refresh lease.
+    pub fn clear_refresh_progress(&self, owner: &str) -> Result<()> {
+        self.connection.execute(
+            "DELETE FROM metadata WHERE key = ?1
+             AND EXISTS (
+               SELECT 1 FROM metadata WHERE key = 'refresh_lease_owner' AND value = ?2
+             )",
+            params![REFRESH_PROGRESS_KEY, owner],
+        )?;
+        Ok(())
+    }
+
+    fn metadata(&self, key: &str) -> Result<Option<String>> {
+        self.connection
+            .query_row("SELECT value FROM metadata WHERE key = ?1", [key], |row| {
+                row.get::<_, String>(0)
+            })
+            .optional()
+            .map_err(Into::into)
+    }
+
+    fn set_metadata(&self, key: &str, value: &str) -> Result<()> {
+        self.connection.execute(
+            "INSERT INTO metadata(key, value) VALUES (?1, ?2)
+             ON CONFLICT(key) DO UPDATE SET value = excluded.value",
+            params![key, value],
         )?;
         Ok(())
     }
@@ -418,6 +515,18 @@ impl Store {
              FROM sayings WHERE id = ?1",
             [id], read_saying
         ).optional().map_err(Into::into)
+    }
+
+    /// Entries that share a multilingual group, Spanish first and then by language code.
+    pub fn by_group(&self, group_id: &str) -> Result<Vec<Saying>> {
+        let mut statement = self.connection.prepare(
+            "SELECT id, text, category, language, source, source_url, original_url, captured_at, group_id
+             FROM sayings WHERE group_id = ?1
+             ORDER BY (language = 'es') DESC, language",
+        )?;
+        let rows = statement.query_map([group_id], read_saying)?;
+        rows.collect::<rusqlite::Result<Vec<_>>>()
+            .map_err(Into::into)
     }
 
     /// Count entries by source, language and category.
@@ -805,5 +914,101 @@ mod tests {
             .0
             .starts_with("https://web.archive.org/web/20240512091123/"));
         assert_eq!(stored.1.as_deref(), Some("20240512091123"));
+    }
+
+    #[test]
+    fn file_catalogs_use_wal_and_readers_survive_a_writer() {
+        let path = std::env::temp_dir().join(format!(
+            "refranero-wal-{}-{:?}.sqlite3",
+            std::process::id(),
+            std::thread::current().id()
+        ));
+        for suffix in ["", "-wal", "-shm"] {
+            let _ = std::fs::remove_file(format!("{}{suffix}", path.display()));
+        }
+
+        let reader = Store::open(&path).unwrap();
+        let mut writer = Store::open(&path).unwrap();
+
+        let journal: String = reader
+            .connection
+            .query_row("PRAGMA journal_mode", [], |row| row.get(0))
+            .unwrap();
+        assert_eq!(journal.to_lowercase(), "wal");
+        let timeout: i64 = reader
+            .connection
+            .query_row("PRAGMA busy_timeout", [], |row| row.get(0))
+            .unwrap();
+        assert_eq!(timeout, 5000);
+
+        // An open write transaction must not block a reader.
+        let transaction = writer.connection.transaction().unwrap();
+        transaction
+            .execute("UPDATE sayings SET text = text WHERE id = 1", [])
+            .unwrap();
+        assert!(reader.count().unwrap() > 0);
+        transaction.rollback().unwrap();
+
+        drop(reader);
+        drop(writer);
+        for suffix in ["", "-wal", "-shm"] {
+            let _ = std::fs::remove_file(format!("{}{suffix}", path.display()));
+        }
+    }
+
+    #[test]
+    fn finds_multilingual_variants_by_group() {
+        let store = Store::open(Path::new(":memory:")).unwrap();
+        let variants = store.by_group("cvc:59530").unwrap();
+        let languages: Vec<&str> = variants
+            .iter()
+            .map(|saying| saying.entry.language.as_str())
+            .collect();
+        assert_eq!(languages, ["ca", "en"]);
+        assert!(store.by_group("cvc:missing").unwrap().is_empty());
+    }
+
+    #[test]
+    fn publishes_and_clears_refresh_progress_only_for_the_lease_owner() {
+        let mut store = Store::open(Path::new(":memory:")).unwrap();
+        assert!(store.refresh_progress().unwrap().is_none());
+        assert!(store.try_acquire_refresh_lease(1_000, "worker-a").unwrap());
+
+        let progress = RefreshProgress {
+            phase: "Wayback".into(),
+            done: 3,
+            total: 10,
+            updated_at: 100,
+        };
+        store.set_refresh_progress(&progress).unwrap();
+        assert_eq!(store.refresh_progress().unwrap(), Some(progress.clone()));
+
+        store.clear_refresh_progress("worker-b").unwrap();
+        assert_eq!(
+            store.refresh_progress().unwrap(),
+            Some(progress),
+            "another owner must not clear the bar"
+        );
+
+        store.clear_refresh_progress("worker-a").unwrap();
+        assert!(store.refresh_progress().unwrap().is_none());
+    }
+
+    #[test]
+    fn corrupt_progress_reads_as_none() {
+        let store = Store::open(Path::new(":memory:")).unwrap();
+        store.set_metadata("refresh_progress", "not json").unwrap();
+        assert!(store.refresh_progress().unwrap().is_none());
+    }
+
+    #[test]
+    fn stores_wayback_marker_and_cursor_atomically() {
+        let mut store = Store::open(Path::new(":memory:")).unwrap();
+        assert_eq!(store.last_wayback_refresh().unwrap(), None);
+        assert_eq!(store.wayback_cursor().unwrap(), None);
+
+        store.record_wayback_success('C', 42).unwrap();
+        assert_eq!(store.last_wayback_refresh().unwrap(), Some(42));
+        assert_eq!(store.wayback_cursor().unwrap(), Some('C'));
     }
 }
