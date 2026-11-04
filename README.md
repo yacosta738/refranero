@@ -481,8 +481,12 @@ musl is not currently supported.
 
 ### Diagrams
 
-Three self-contained HTML diagrams render this system visually. Open any file
-directly in a browser; no build step or local server is required.
+Three standalone HTML diagrams render this system visually. Each file opens
+directly in a browser with no build step or local server. GitHub itself
+renders these links as source code, not as a figure — download the file or
+clone the repository to view the rendered diagram. Diagram text loads the
+Geist and Instrument Serif fonts from Google Fonts over the network; offline,
+the page still renders with the system font fallback.
 
 - [`architecture-internal.html`](docs/diagrams/architecture-internal.html) —
   the module bands, the catalog as the only writer target, and the two network

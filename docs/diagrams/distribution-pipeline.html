@@ -110,12 +110,14 @@
     <svg viewBox="0 0 980 600" role="img" aria-labelledby="dist-title dist-desc">
       <title id="dist-title">Refranero build and distribution pipeline</title>
       <desc id="dist-desc">
-        The Rust source repository feeds a single release workflow in GitHub Actions. That workflow
-        cross-compiles six native binaries for macOS, Linux and Windows on x64 and arm64, then
-        publishes three parallel outputs: the crate to crates.io for cargo install, six native npm
-        platform packages plus a thin Node wrapper to the npm registry for npm install, and a
-        multi-architecture image to a container registry for docker run. End users reach the same
-        compiled binary through whichever path they prefer.
+        The Rust source repository feeds a single release workflow in GitHub Actions. On a tagged
+        release, four native runners build the binary for Linux and macOS on x64 and arm64;
+        Windows on x64 and arm64 builds natively inside the npm publish job instead of being
+        cross-compiled ahead of time. The workflow then publishes three parallel outputs: the
+        crate to crates.io for cargo install, six native npm platform packages plus a thin Node
+        wrapper to the npm registry for npm install, and a multi-architecture image to a container
+        registry for docker run. End users reach the same compiled binary through whichever path
+        they prefer.
       </desc>
       <defs>
         <marker id="darrow" viewBox="0 0 10 10" refX="8" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
@@ -147,13 +149,13 @@
       <text x="892" y="69" fill="rgba(245,245,245,0.40)" font-size="7" font-family="'Geist Mono', monospace" text-anchor="middle" letter-spacing="0.12em">END USER</text>
 
       <!-- Arrows -->
-      <!-- Repo -> Cross-compile -->
+      <!-- Repo -> Build binaries -->
       <path d="M 192,112 V 150" fill="none" stroke="#bfc0c0" stroke-width="1.2" marker-end="url(#darrow)" />
-      <!-- Cross-compile -> npm packager -->
-      <path d="M 232,190 H 300 Q 308,190 308,198 V 204 Q 308,212 316,212 H 356" fill="none" stroke="#bfc0c0" stroke-width="1.2" marker-end="url(#darrow)" />
 
-      <!-- Build zone -> publish zone: 3 release jobs -->
+      <!-- Build binaries -> publish zone: tagged release triggers all 3 publish jobs -->
       <path d="M 192,226 H 404 Q 412,226 412,234 V 240" fill="none" stroke="#f08a59" stroke-width="1.2" marker-end="url(#darrow-coral)" />
+      <path d="M 192,190 V 368 H 364" fill="none" stroke="#f08a59" stroke-width="1.2" marker-end="url(#darrow-coral)" />
+      <path d="M 160,248 V 432 H 364" fill="none" stroke="#f08a59" stroke-width="1.2" marker-end="url(#darrow-coral)" />
       <rect x="248" y="214" width="110" height="12" rx="2" fill="#2d3142" />
       <text x="303" y="223" fill="#f08a59" font-size="8" font-family="'Geist Mono', monospace" text-anchor="middle" letter-spacing="0.04em">on tagged release</text>
 
@@ -186,8 +188,8 @@
       <g>
         <rect x="128" y="150" width="128" height="40" rx="6" fill="#2d3142" />
         <rect x="128" y="150" width="128" height="40" rx="6" fill="#393e53" stroke="#f5f5f5" stroke-width="1" />
-        <text x="192" y="166" fill="#f5f5f5" font-size="11" font-weight="600" font-family="'Geist', sans-serif" text-anchor="middle">Cross-compile</text>
-        <text x="192" y="180" fill="#bfc0c0" font-size="8" font-family="'Geist Mono', monospace" text-anchor="middle">6 targets, x64/arm64</text>
+        <text x="192" y="166" fill="#f5f5f5" font-size="11" font-weight="600" font-family="'Geist', sans-serif" text-anchor="middle">Build binaries</text>
+        <text x="192" y="180" fill="#bfc0c0" font-size="8" font-family="'Geist Mono', monospace" text-anchor="middle">4 native runners</text>
       </g>
       <g>
         <rect x="64" y="208" width="128" height="40" rx="6" fill="#2d3142" />
@@ -276,10 +278,12 @@
 
   <div class="cards">
     <div class="card">
-      <div class="card-header"><span class="card-dot coral"></span><h3>One trigger, three artifacts</h3></div>
+      <div class="card-header"><span class="card-dot coral"></span><h3>One trigger, three publish jobs</h3></div>
       <ul>
-        <li>A single tagged release runs cross-compilation once for six targets.</li>
-        <li>Three publish jobs reuse those binaries: crate, npm packages, Docker image.</li>
+        <li>A tagged release builds Linux and macOS binaries on 4 native runners (x64/arm64).</li>
+        <li>Windows x64/arm64 builds natively inside the npm publish job, not ahead of time.</li>
+        <li>Only the npm packages use prebuilt binaries; crates.io and Docker build from source.</li>
+        <li>A recovery <code>workflow_dispatch</code> with a release tag skips registry publishing.</li>
       </ul>
     </div>
     <div class="card">
@@ -287,7 +291,7 @@
       <ul>
         <li><code>npm/wrapper</code> ships a small launcher script, no binary inside it.</li>
         <li>It resolves and runs the one optional native package matching the user's OS/CPU.</li>
-        <li><code>scripts/prepare-npm.mjs</code> is the single source of truth for the platform map.</li>
+        <li><code>scripts/prepare-npm.mjs</code> holds the platform map used to build the packages.</li>
       </ul>
     </div>
     <div class="card">
