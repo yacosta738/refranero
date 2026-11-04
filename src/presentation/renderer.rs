@@ -8,7 +8,12 @@ use textwrap::{core::display_width, fill, Options, WordSeparator};
 
 use crate::domain::Saying;
 
-use super::{label, sanitize, theme::Theme, RenderOptions};
+use super::{
+    i18n::{Catalog, Message},
+    sanitize,
+    theme::Theme,
+    RenderOptions,
+};
 
 const INDENT: usize = 2;
 /// Longest line the reader has to track. Wider terminals get margins, not longer lines.
@@ -18,8 +23,6 @@ const MIN_FULL_WIDTH: usize = 70;
 const MIN_COMPACT_WIDTH: usize = 40;
 const RULE: char = '─';
 const GUTTER: char = '│';
-const LINK_LABEL: &str = "Consultar fuente";
-
 /// Language chips shown under the eyebrow in the interactive reader.
 pub struct LanguageStrip<'a> {
     /// Caption that explains what the codes mean.
@@ -47,7 +50,7 @@ pub fn render_with_languages(
     let theme = Theme::new(options.color);
     let width = options.width.max(MIN_WIDTH);
     if !options.interactive || width < MIN_COMPACT_WIDTH {
-        return render_plain(sayings, width, &theme);
+        return render_plain(sayings, width, &theme, options.language);
     }
     let measure = measure(width);
     if sayings.len() > 1 {
@@ -77,10 +80,10 @@ fn render_full(
     let mut lines = vec![String::new()];
     lines.push(format!(
         "{indent}{}",
-        theme.eyebrow(&eyebrow(saying, false))
+        theme.eyebrow(&eyebrow(saying, false, options.language))
     ));
     if let Some(strip) = strip {
-        lines.extend(strip_lines(strip, measure, theme));
+        lines.extend(strip_lines(strip, measure, theme, options.language));
     }
     lines.push(format!(
         "{indent}{}",
@@ -96,7 +99,7 @@ fn render_full(
     ));
     lines.push(String::new());
     lines.extend(paint_meta(
-        &wrap(&meta(saying), measure, &indent, &indent),
+        &wrap(&meta(saying, options.language), measure, &indent, &indent),
         theme,
     ));
     lines.extend(link_lines(saying, &indent, theme, options));
@@ -114,9 +117,12 @@ fn render_compact(
     let subsequent = format!("{indent} ");
 
     let mut lines = vec![String::new()];
-    lines.push(format!("{indent}{}", theme.eyebrow(&eyebrow(saying, true))));
+    lines.push(format!(
+        "{indent}{}",
+        theme.eyebrow(&eyebrow(saying, true, options.language))
+    ));
     if let Some(strip) = strip {
-        lines.extend(strip_lines(strip, measure, theme));
+        lines.extend(strip_lines(strip, measure, theme, options.language));
     }
     lines.push(String::new());
     lines.extend(paint_quote(
@@ -128,7 +134,7 @@ fn render_compact(
     ));
     lines.push(String::new());
     lines.extend(paint_meta(
-        &wrap(&meta(saying), measure, &indent, &indent),
+        &wrap(&meta(saying, options.language), measure, &indent, &indent),
         theme,
     ));
     lines.extend(link_lines(saying, &indent, theme, options));
@@ -147,7 +153,7 @@ fn render_collection(
     let mut lines = vec![String::new()];
     lines.push(format!(
         "{indent}{}",
-        theme.eyebrow(&collection_eyebrow(sayings))
+        theme.eyebrow(&collection_eyebrow(sayings, options.language))
     ));
     lines.push(format!(
         "{indent}{}",
@@ -169,7 +175,12 @@ fn render_collection(
             Some(&index_label),
         ));
         lines.extend(paint_meta(
-            &wrap(&meta(saying), measure, &meta_indent, &meta_indent),
+            &wrap(
+                &meta(saying, options.language),
+                measure,
+                &meta_indent,
+                &meta_indent,
+            ),
             theme,
         ));
         lines.extend(link_lines(saying, &meta_indent, theme, options));
@@ -177,7 +188,7 @@ fn render_collection(
     lines.join("\n")
 }
 
-fn render_plain(sayings: &[Saying], width: usize, theme: &Theme) -> String {
+fn render_plain(sayings: &[Saying], width: usize, theme: &Theme, ui: super::UiLanguage) -> String {
     let mut blocks = Vec::with_capacity(sayings.len());
     for (index, saying) in sayings.iter().enumerate() {
         let indent = if sayings.len() > 1 {
@@ -193,7 +204,7 @@ fn render_plain(sayings: &[Saying], width: usize, theme: &Theme) -> String {
             theme,
             None,
         );
-        let source = label::source(&sanitize::clean(&saying.entry.source));
+        let source = Catalog::new(ui).source_name(&sanitize::clean(&saying.entry.source));
         let code = sanitize::clean(&saying.entry.language);
         let candidates = [
             format!("{source} · {code} · #{}", saying.id),
@@ -206,18 +217,31 @@ fn render_plain(sayings: &[Saying], width: usize, theme: &Theme) -> String {
             .find(|candidate| display_width(candidate) <= width)
             .unwrap_or_else(|| format!("#{}", saying.id));
         lines.push(theme.meta(&meta_text));
-        lines.extend(link_lines(saying, "", theme, &RenderOptions::plain(width)));
+        lines.extend(link_lines(
+            saying,
+            "",
+            theme,
+            &RenderOptions {
+                language: ui,
+                ..RenderOptions::plain(width)
+            },
+        ));
         blocks.push(lines.join("\n"));
     }
     blocks.join("\n\n")
 }
 
-fn strip_lines(strip: &LanguageStrip<'_>, width: usize, theme: &Theme) -> Vec<String> {
+fn strip_lines(
+    strip: &LanguageStrip<'_>,
+    width: usize,
+    theme: &Theme,
+    ui: super::UiLanguage,
+) -> Vec<String> {
     if strip.codes.is_empty() {
         return Vec::new();
     }
     let indent = " ".repeat(INDENT);
-    let label = format!("{}: ", short_label(strip.label, width));
+    let label = format!("{}: ", short_label(strip.label, width, ui));
     let mut line = format!("{indent}{}", theme.meta(&label));
     let mut used = display_width(&line);
     let mut first = true;
@@ -255,42 +279,50 @@ fn strip_lines(strip: &LanguageStrip<'_>, width: usize, theme: &Theme) -> Vec<St
 }
 
 /// Keep the caption short when the measure cannot afford the long one.
-const fn short_label(label: &str, width: usize) -> &str {
+fn short_label(label: &str, width: usize, ui: super::UiLanguage) -> String {
     if width < 50 {
-        "Idiomas"
+        Catalog::new(ui)
+            .text(Message::LanguageStripShort)
+            .to_owned()
     } else {
-        label
+        label.to_owned()
     }
 }
 
-fn eyebrow(saying: &Saying, code_only: bool) -> String {
-    let category = label::category(&sanitize::clean(&saying.entry.category)).to_uppercase();
+fn eyebrow(saying: &Saying, code_only: bool, ui: super::UiLanguage) -> String {
+    let category = Catalog::new(ui)
+        .category(&sanitize::clean(&saying.entry.category))
+        .to_uppercase();
     let code = sanitize::clean(&saying.entry.language);
     let language = if code_only {
         code.to_uppercase()
     } else {
-        label::language(&code).to_uppercase()
+        Catalog::new(ui).language_name(&code).to_uppercase()
     };
     format!("{category} · {language}")
 }
 
-fn collection_eyebrow(sayings: &[Saying]) -> String {
+fn collection_eyebrow(sayings: &[Saying], ui: super::UiLanguage) -> String {
     let category = sayings[0].entry.category.as_str();
     let uniform = sayings
         .iter()
         .all(|saying| saying.entry.category == category);
     let noun = if uniform {
-        label::plural(category)
+        Catalog::new(ui).category_plural(category)
     } else {
-        "ENTRADAS"
+        Catalog::new(ui).text(Message::EntriesFallback)
     };
-    format!("REFRANERO · {} {noun}", sayings.len())
+    format!(
+        "{} · {} {noun}",
+        Catalog::new(ui).text(Message::CollectionBrand),
+        sayings.len()
+    )
 }
 
-fn meta(saying: &Saying) -> String {
+fn meta(saying: &Saying, ui: super::UiLanguage) -> String {
     format!(
         "{} · #{}",
-        label::source(&sanitize::clean(&saying.entry.source)),
+        Catalog::new(ui).source_name(&sanitize::clean(&saying.entry.source)),
         saying.id
     )
 }
@@ -397,7 +429,10 @@ fn link_lines(
     let raw = &saying.entry.source_url;
     if options.links {
         if let Some(target) = sanitize::safe_https_url(raw) {
-            let label = theme.link(&format!("↗ {LINK_LABEL}"));
+            let label = theme.link(&format!(
+                "↗ {}",
+                Catalog::new(options.language).text(Message::LinkLabel)
+            ));
             let open = format!("\u{1b}]8;;{target}\u{1b}\\");
             let close = "\u{1b}]8;;\u{1b}\\";
             return vec![format!("{initial}{open}{label}{close}")];
@@ -413,7 +448,7 @@ mod tests {
     use textwrap::core::display_width;
 
     use super::{render, render_with_languages, LanguageStrip, Saying};
-    use crate::presentation::RenderOptions;
+    use crate::presentation::{RenderOptions, UiLanguage};
 
     const URL: &str =
         "https://www.cervantesvirtual.com/obra-visor/refranes-alusivos-al-tiempo/html/";
@@ -441,6 +476,7 @@ mod tests {
             color: false,
             links: false,
             interactive: true,
+            language: UiLanguage::Spanish,
         }
     }
 
@@ -450,6 +486,18 @@ mod tests {
             color: false,
             links: true,
             interactive: true,
+            language: UiLanguage::Spanish,
+        }
+    }
+
+    /// Interactive options for a given interface language.
+    fn interactive_in(width: usize, language: UiLanguage) -> RenderOptions {
+        RenderOptions {
+            width,
+            color: false,
+            links: false,
+            interactive: true,
+            language,
         }
     }
 
@@ -579,6 +627,7 @@ mod tests {
                     color: false,
                     links: false,
                     interactive: true,
+                    language: UiLanguage::Spanish,
                 },
             );
             assert!(!output.contains('\x1b'), "width {width}: {output:?}");
@@ -595,6 +644,7 @@ mod tests {
                 color: true,
                 links: false,
                 interactive: true,
+                language: UiLanguage::Spanish,
             },
         );
         assert!(!painted.contains("[31m"), "{painted:?}");
@@ -706,5 +756,72 @@ mod tests {
         ];
         let output = render(&sayings, &interactive(80));
         insta::assert_snapshot!(output);
+    }
+
+    #[test]
+    fn english_editorial_snapshot() {
+        let output = render(
+            &[saying(164, LONG_TEXT)],
+            &interactive_in(80, UiLanguage::English),
+        );
+        insta::assert_snapshot!(output);
+    }
+
+    #[test]
+    fn english_compact_snapshot() {
+        let output = render(
+            &[saying(164, LONG_TEXT)],
+            &interactive_in(40, UiLanguage::English),
+        );
+        insta::assert_snapshot!(output);
+    }
+
+    #[test]
+    fn english_plain_snapshot() {
+        let output = render(
+            &[saying(164, LONG_TEXT)],
+            &interactive_in(30, UiLanguage::English),
+        );
+        insta::assert_snapshot!(output);
+    }
+
+    #[test]
+    fn english_collection_snapshot() {
+        let sayings = [
+            saying(24, "A quien madruga, Dios le ayuda."),
+            saying(85, "No por mucho madrugar amanece más temprano."),
+            saying(127, "Más vale tarde que nunca."),
+        ];
+        let output = render(&sayings, &interactive_in(80, UiLanguage::English));
+        insta::assert_snapshot!(output);
+    }
+
+    #[test]
+    fn english_labels_name_the_category_and_the_language() {
+        let output = render(
+            &[saying(164, LONG_TEXT)],
+            &interactive_in(80, UiLanguage::English),
+        );
+        assert!(output.contains("SAYING · SPANISH"), "{output}");
+    }
+
+    #[test]
+    fn spanish_labels_stay_the_default() {
+        let output = render(&[saying(164, LONG_TEXT)], &interactive(80));
+        assert!(output.contains("REFRÁN · ESPAÑOL"), "{output}");
+    }
+
+    #[test]
+    fn english_language_strip_uses_the_english_caption() {
+        let output = render_with_languages(
+            &[saying(164, LONG_TEXT)],
+            &interactive_in(40, UiLanguage::English),
+            Some(&LanguageStrip {
+                label: "Other languages",
+                codes: &["es".to_owned(), "ca".to_owned()],
+                current: "es",
+            }),
+        );
+        assert!(output.contains("Languages:"), "{output}");
     }
 }

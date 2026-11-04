@@ -30,6 +30,7 @@ pub fn detect(mode: ColorMode) -> RenderOptions {
         color,
         links: interactive && color,
         interactive,
+        language: super::UiLanguage::Spanish,
     }
 }
 
