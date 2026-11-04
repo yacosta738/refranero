@@ -4,6 +4,7 @@
 import { copyFileSync, mkdirSync, readFileSync, statSync, writeFileSync, chmodSync } from 'node:fs';
 import { basename, join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
+import { isSemver } from './semver.mjs';
 
 const root = resolve(fileURLToPath(new URL('../', import.meta.url)));
 const platforms = {
@@ -15,7 +16,7 @@ const platforms = {
   'aarch64-pc-windows-msvc': ['win32', 'arm64'],
 };
 const [target, binaryPath, version = '0.1.0', outputRoot = join(root, 'npm', 'dist')] = process.argv.slice(2);
-if (!platforms[target] || !binaryPath || !/^\d+\.\d+\.\d+(?:-[a-z\d.-]+)?$/.test(version)) {
+if (!platforms[target] || !binaryPath || !isSemver(version)) {
   process.stderr.write('Usage: node scripts/prepare-npm.mjs <rust-target> <binary-path> [version] [output-directory]\n');
   process.exit(2);
 }

@@ -61,6 +61,28 @@ npm install --global @yacosta738/refranero
 refranero
 ```
 
+### Install with Homebrew
+
+The Homebrew tap provides prebuilt binaries for macOS Apple Silicon and Intel. The
+same tap can be read by Homebrew-compatible clients such as nanobrew and malt.
+
+```sh
+brew tap yacosta738/refranero-homebrew-tap https://github.com/yacosta738/refranero-homebrew-tap
+brew install refranero
+```
+
+With nanobrew or malt, install directly from the tap:
+
+```sh
+nb install yacosta738/refranero-homebrew-tap/refranero
+mt install yacosta738/refranero-homebrew-tap/refranero
+```
+
+The tap will become installable after the next release publishes its binary
+archives and checksums. Linux archives are built, but Linux formula support is
+not exposed yet because compatibility with all supported formula parsers is not
+verified.
+
 ### Install from crates.io
 
 Rust 1.89 or newer is required to install or build from source.

@@ -33,15 +33,20 @@ build:
 lint-md:
     pnpm exec markdownlint-cli2
 
-# Run the Node wrapper and packaging checks
+# Run the Node wrapper and npm packaging checks
 npm-check:
     node --check npm/wrapper/bin/refranero.mjs
     node --check scripts/prepare-npm.mjs
     node --test tests/npm-packaging.test.mjs
     cd npm/wrapper && npm pack --dry-run
 
+# Run the release tarball packaging checks
+release-check:
+    node --check scripts/prepare-release-tarball.mjs
+    node --test tests/release-tarball.test.mjs
+
 # Run every local quality gate
-ci: fmt-check clippy test lint-md npm-check
+ci: fmt-check clippy test lint-md npm-check release-check
 
 # Install the JavaScript tooling and the git hooks
 install-hooks:

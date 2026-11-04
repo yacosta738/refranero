@@ -40,7 +40,9 @@ jobs:
           node-version: '26'
       - run: node --check npm/wrapper/bin/refranero.mjs
       - run: node --check scripts/prepare-npm.mjs
+      - run: node --check scripts/prepare-release-tarball.mjs
       - run: node --test tests/npm-packaging.test.mjs
+      - run: node --test tests/release-tarball.test.mjs
       - run: cd npm/wrapper && npm pack --dry-run
   native-packages:
     name: Native package (${{ matrix.target }})

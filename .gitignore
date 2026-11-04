@@ -1,6 +1,7 @@
 /target/
 /tmp/
 /npm/dist/
+/release-dist/
 *.sqlite
 *.sqlite3
 *.sqlite3-shm
