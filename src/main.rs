@@ -112,8 +112,7 @@ enum SyncSource {
 
 fn main() -> Result<()> {
     let cli = Cli::parse();
-    let ui_language =
-        presentation::resolve_ui_language(cli.ui_lang, |name| std::env::var(name).ok());
+    let ui_language = presentation::resolve_ui_language(cli.ui_lang, |name| std::env::var_os(name));
     let db = match cli.db.as_ref() {
         Some(path) => path.clone(),
         None => dirs::data_local_dir()

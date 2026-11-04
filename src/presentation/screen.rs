@@ -125,40 +125,56 @@ fn entry_lines(screen: &Screen<'_>) -> Vec<String> {
         .collect()
 }
 
+/// Key column of the long help layout.
+const HELP_KEY_COLUMN: usize = 22;
+
 fn help_lines(theme: &Theme, width: usize, catalog: Catalog) -> Vec<String> {
-    let rows: Vec<(&str, &str)> = if width < 44 {
-        vec![
-            ("n", catalog.text(Message::HelpNextShort)),
-            ("l", catalog.text(Message::HelpLanguageShort)),
-            ("h", catalog.text(Message::HelpPreviousShort)),
-            ("c", catalog.text(Message::HelpCategoryShort)),
-            ("o", catalog.text(Message::HelpOpenShort)),
-            ("?", catalog.text(Message::HelpCloseShort)),
-            ("q", catalog.text(Message::HelpQuitShort)),
-        ]
-    } else {
-        vec![
-            (
-                catalog.text(Message::HelpNextKeys),
-                catalog.text(Message::HelpNextLong),
-            ),
-            (
-                catalog.text(Message::HelpNextLanguageKeys),
-                catalog.text(Message::HelpNextLanguageLong),
-            ),
-            (
-                catalog.text(Message::HelpPreviousLanguageKeys),
-                catalog.text(Message::HelpPreviousLanguageLong),
-            ),
-            ("c", catalog.text(Message::HelpCategoryLong)),
-            ("o", catalog.text(Message::HelpOpenLong)),
-            ("?", catalog.text(Message::HelpCloseLong)),
-            (
-                catalog.text(Message::HelpQuitKeys),
-                catalog.text(Message::HelpQuitLong),
-            ),
-        ]
-    };
+    let short_rows: Vec<(&str, &str)> = vec![
+        ("n", catalog.text(Message::HelpNextShort)),
+        ("l", catalog.text(Message::HelpLanguageShort)),
+        ("h", catalog.text(Message::HelpPreviousShort)),
+        ("c", catalog.text(Message::HelpCategoryShort)),
+        ("o", catalog.text(Message::HelpOpenShort)),
+        ("?", catalog.text(Message::HelpCloseShort)),
+        ("q", catalog.text(Message::HelpQuitShort)),
+    ];
+    let long_rows: Vec<(&str, &str)> = vec![
+        (
+            catalog.text(Message::HelpNextKeys),
+            catalog.text(Message::HelpNextLong),
+        ),
+        (
+            catalog.text(Message::HelpNextLanguageKeys),
+            catalog.text(Message::HelpNextLanguageLong),
+        ),
+        (
+            catalog.text(Message::HelpPreviousLanguageKeys),
+            catalog.text(Message::HelpPreviousLanguageLong),
+        ),
+        ("c", catalog.text(Message::HelpCategoryLong)),
+        ("o", catalog.text(Message::HelpOpenLong)),
+        ("?", catalog.text(Message::HelpCloseLong)),
+        (
+            catalog.text(Message::HelpQuitKeys),
+            catalog.text(Message::HelpQuitLong),
+        ),
+    ];
+
+    // The long layout indents the keys and pads them to a column. It needs room for that column
+    // plus the longest action; below that the compact layout keeps rows inside the terminal.
+    let key_width = long_rows
+        .iter()
+        .map(|(keys, _)| display_width(keys))
+        .max()
+        .unwrap_or(0)
+        .max(HELP_KEY_COLUMN);
+    let long_width = long_rows
+        .iter()
+        .map(|(_, action)| 2 + key_width + display_width(action))
+        .max()
+        .unwrap_or(0);
+    let long = width >= long_width;
+    let rows = if long { &long_rows } else { &short_rows };
 
     let mut lines = vec![
         String::new(),
@@ -170,10 +186,10 @@ fn help_lines(theme: &Theme, width: usize, catalog: Catalog) -> Vec<String> {
         String::new(),
     ];
     for (keys, action) in rows {
-        let keys = if width < 44 {
-            format!("{keys}  ")
+        let keys = if long {
+            format!("{keys:<key_width$}")
         } else {
-            format!("{keys:<22}")
+            format!("{keys}  ")
         };
         lines.push(format!("  {}{action}", theme.link(&keys)));
     }
@@ -580,6 +596,18 @@ mod tests {
         assert!(frame.contains("SHORTCUTS"), "{frame}");
         assert!(frame.contains("Another saying"), "{frame}");
         assert!(frame.contains("Open the source"), "{frame}");
+    }
+
+    #[test]
+    fn help_fits_every_narrow_width() {
+        let entry = saying("Más vale tarde que nunca.");
+        for language in [UiLanguage::Spanish, UiLanguage::English] {
+            for width in [24, 32, 44, 48, 51, 52, 80] {
+                let mut options = screen_in(&entry, width, 20, language);
+                options.help = true;
+                assert_fits(&compose(&options), width);
+            }
+        }
     }
 
     #[test]

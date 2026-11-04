@@ -4,6 +4,8 @@
 //! sayings and `--ui-lang` selects the language of the labels. Every string the interface shows
 //! comes from [`Catalog`], so the renderer and the session never read the environment.
 
+use std::ffi::OsString;
+
 use super::label;
 
 /// Language of the terminal interface.
@@ -336,7 +338,7 @@ pub fn parse_locale(tag: &str) -> Option<UiLanguage> {
 /// an unknown locale falls back to Spanish, because the interface only speaks two languages.
 pub fn resolve_ui_language<F>(explicit: Option<UiLanguage>, lookup: F) -> UiLanguage
 where
-    F: Fn(&str) -> Option<String>,
+    F: Fn(&str) -> Option<OsString>,
 {
     if let Some(language) = explicit {
         return language;
@@ -345,6 +347,9 @@ where
         let Some(value) = lookup(variable) else {
             continue;
         };
+        // A value that is not valid UTF-8 still decides the language: it cannot name a locale,
+        // so the interface falls back to Spanish instead of reading the next variable.
+        let value = value.to_string_lossy();
         let value = value.trim();
         if value.is_empty() {
             continue;
@@ -356,14 +361,16 @@ where
 
 #[cfg(test)]
 mod tests {
+    use std::ffi::OsString;
+
     use super::{parse_locale, resolve_ui_language, Catalog, Message, UiLanguage, ALL_MESSAGES};
 
-    fn env<'a>(values: &'a [(&'a str, &'a str)]) -> impl Fn(&str) -> Option<String> + 'a {
+    fn env<'a>(values: &'a [(&'a str, &'a str)]) -> impl Fn(&str) -> Option<OsString> + 'a {
         move |name| {
             values
                 .iter()
                 .find(|(key, _)| *key == name)
-                .map(|(_, value)| (*value).to_owned())
+                .map(|(_, value)| OsString::from(*value))
         }
     }
 
@@ -414,6 +421,20 @@ mod tests {
 
         let lang = env(&[("LANG", "en_US.UTF-8")]);
         assert_eq!(resolve_ui_language(None, lang), UiLanguage::English);
+    }
+
+    #[test]
+    fn a_non_utf8_locale_still_decides() {
+        use std::os::unix::ffi::OsStringExt;
+
+        // `LC_ALL` holds bytes that are not valid UTF-8 and `LANG` would select English:
+        // the set `LC_ALL` decides, and it cannot name a language, so Spanish is selected.
+        let lookup = |name: &str| match name {
+            "LC_ALL" => Some(OsString::from_vec(vec![b'f', b'r', b'_', b'F', b'R', 0xff])),
+            "LANG" => Some(OsString::from("en_US.UTF-8")),
+            _ => None,
+        };
+        assert_eq!(resolve_ui_language(None, lookup), UiLanguage::Spanish);
     }
 
     #[test]

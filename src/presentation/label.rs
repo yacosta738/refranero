@@ -15,7 +15,7 @@ pub fn category(ui: UiLanguage, value: &str) -> String {
         "adivinanza" => pick(ui, "Adivinanza", "Riddle"),
         "cita" => pick(ui, "Cita literaria", "Literary quote"),
         "" => pick(ui, "Desconocido", "Unknown"),
-        other => humanize(other),
+        other => humanize(ui, other),
     }
 }
 
@@ -65,7 +65,7 @@ pub fn source(ui: UiLanguage, value: &str) -> String {
             "Centro Virtual Cervantes · Archive",
         ),
         "" => pick(ui, "Fuente desconocida", "Unknown source"),
-        other => humanize(other),
+        other => humanize(ui, other),
     }
 }
 
@@ -82,7 +82,7 @@ const fn pick_static(ui: UiLanguage, spanish: &'static str, english: &'static st
     }
 }
 
-fn humanize(value: &str) -> String {
+fn humanize(ui: UiLanguage, value: &str) -> String {
     let mut output = String::with_capacity(value.len());
     for (index, word) in value
         .split(['_', '-'])
@@ -99,7 +99,7 @@ fn humanize(value: &str) -> String {
         }
     }
     if output.is_empty() {
-        "Desconocido".to_owned()
+        pick(ui, "Desconocido", "Unknown")
     } else {
         output
     }
@@ -144,6 +144,14 @@ mod tests {
         assert_eq!(source(ES, ""), "Fuente desconocida");
         assert_eq!(source(EN, "mi_archivo"), "Mi Archivo");
         assert_eq!(source(EN, ""), "Unknown source");
+    }
+
+    #[test]
+    fn separator_only_identifiers_fall_back_to_the_interface_language() {
+        assert_eq!(source(ES, "___"), "Desconocido");
+        assert_eq!(source(EN, "___"), "Unknown");
+        assert_eq!(category(ES, "__"), "Desconocido");
+        assert_eq!(category(EN, "__"), "Unknown");
     }
 
     #[test]
