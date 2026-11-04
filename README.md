@@ -121,7 +121,9 @@ When `stdin` and `stdout` are terminals, `refranero` opens a full-screen reader.
 The automatic refresh check runs before the reader opens, and its worker keeps
 updating the catalog in the background while you read. The reader announces
 `Catálogo actualizado` when the new data lands; the entry on screen is not
-replaced under you. Use `--offline` to skip the refresh entirely.
+replaced under you. Use `--offline` to skip the refresh entirely. The request
+path is drawn in the
+[reading-flow diagram](docs/diagrams/sequence-reading-flow.html).
 
 While the worker runs, the reader draws a status bar above the key map with the
 phase, a block bar, the percentage and the completed units:
@@ -477,6 +479,20 @@ The published native package targets are `darwin-arm64`, `darwin-x64`,
 `linux-arm64` and `linux-x64` (glibc), `win32-arm64`, and `win32-x64`. Linux
 musl is not currently supported.
 
+### Diagrams
+
+Three self-contained HTML diagrams render this system visually. Open any file
+directly in a browser; no build step or local server is required.
+
+- [`architecture-internal.html`](docs/diagrams/architecture-internal.html) —
+  the module bands, the catalog as the only writer target, and the two network
+  adapters.
+- [`sequence-reading-flow.html`](docs/diagrams/sequence-reading-flow.html) — a
+  read served from the local catalog while a refresh worker runs in the
+  background.
+- [`distribution-pipeline.html`](docs/diagrams/distribution-pipeline.html) —
+  one release tag feeding crates.io, npm, and the container image.
+
 ## Set up the AI agent instructions
 
 The repository guidance for coding agents lives in
@@ -509,7 +525,8 @@ Release Please tracks Conventional Commits on `main`. After a release pull
 request is approved and merged, it creates a version tag and GitHub Release.
 The release workflow publishes the Rust crate to crates.io, the six native
 npm packages and npm wrapper with provenance, and multi-architecture images
-to Docker Hub and GHCR.
+to Docker Hub and GHCR. The publish steps are drawn in the
+[distribution diagram](docs/diagrams/distribution-pipeline.html).
 
 ## Data provenance, legal boundaries, and attribution
 

@@ -1,0 +1,274 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>Refranero — Reading Flow</title>
+<style>
+  @import url('https://fonts.googleapis.com/css2?family=Instrument+Serif:ital@0;1&family=Geist:wght@400;500;600&family=Geist+Mono:wght@400;500&display=swap');
+
+  :root {
+    --paper: #2d3142;
+    --paper-2: #393e53;
+    --ink: #f5f5f5;
+    --muted: #bfc0c0;
+    --soft: #8e98ac;
+    --rule: rgba(245,245,245,0.12);
+    --accent: #f08a59;
+  }
+
+  * { box-sizing: border-box; }
+
+  body {
+    margin: 0;
+    background: var(--paper);
+    color: var(--ink);
+    font-family: 'Geist', sans-serif;
+  }
+
+  .page { max-width: 1040px; margin: 0 auto; padding: 48px 32px 32px; }
+
+  .eyebrow {
+    font-family: 'Geist Mono', monospace;
+    font-size: 11px;
+    letter-spacing: 0.14em;
+    text-transform: uppercase;
+    color: var(--soft);
+    margin: 0 0 8px;
+  }
+
+  h1 {
+    font-family: 'Instrument Serif', serif;
+    font-weight: 400;
+    font-size: 40px;
+    margin: 0 0 8px;
+    line-height: 1.1;
+  }
+
+  .subtitle {
+    font-size: 15px;
+    color: var(--muted);
+    margin: 0 0 32px;
+    max-width: 720px;
+    line-height: 1.5;
+  }
+
+  .diagram { width: 100%; overflow-x: auto; }
+  .diagram svg { display: block; width: 100%; height: auto; min-width: 720px; }
+
+  .cards {
+    display: grid;
+    grid-template-columns: 1fr 1fr;
+    gap: 16px;
+    margin-top: 32px;
+  }
+
+  /* Responsive: the figure keeps a legibility floor and scrolls inside its container */
+  @media (max-width: 1024px) {
+    .page { padding: 44px 24px 32px; }
+  }
+
+  @media (max-width: 720px) {
+    .page { padding: 32px 16px 24px; }
+    h1 { font-size: 30px; }
+    .subtitle { font-size: 14px; margin-bottom: 24px; }
+    .cards { grid-template-columns: 1fr; gap: 14px; }
+    .card { padding: 16px 18px; }
+    footer { margin-top: 28px; }
+  }
+
+  .card {
+    background: #393e53;
+    border: 1px solid var(--rule);
+    border-radius: 6px;
+    padding: 1.25rem;
+  }
+
+  .card-header { display: flex; align-items: center; gap: 8px; margin-bottom: 10px; }
+  .card-dot { width: 7px; height: 7px; border-radius: 50%; flex: none; }
+  .card-dot.coral { background: var(--accent); }
+  .card-dot.muted { background: var(--muted); }
+
+  .card h3 { font-size: 15px; font-weight: 600; margin: 0; }
+  .card ul { margin: 0; padding-left: 18px; font-size: 13px; color: var(--muted); line-height: 1.6; }
+  .card ul li { margin-bottom: 4px; }
+
+  footer {
+    margin-top: 40px;
+    padding-top: 16px;
+    border-top: 1px solid var(--rule);
+    font-family: 'Geist Mono', monospace;
+    font-size: 11px;
+    color: var(--soft);
+    display: flex;
+    justify-content: space-between;
+    flex-wrap: wrap;
+    gap: 8px;
+  }
+</style>
+</head>
+<body>
+<div class="page">
+  <p class="eyebrow">Refranero CLI · Reading flow</p>
+  <h1>What happens when you run it</h1>
+  <p class="subtitle">
+    Running <code>refranero</code> with no arguments always answers from the local catalog first.
+    A background refresh is only scheduled if the cache is stale — it never blocks the saying you
+    asked for.
+  </p>
+
+  <div class="diagram">
+    <svg viewBox="0 0 960 480" role="img" aria-labelledby="seq-title seq-desc">
+      <title id="seq-title">Refranero reading session sequence</title>
+      <desc id="seq-desc">
+        The user runs refranero. The session asks the local SQLite store for a random saying and
+        prints it immediately. In parallel, if the cache is older than its refresh interval and
+        offline mode was not requested, the session spawns a detached background refresh worker that
+        later calls Cervantes Virtual or the Wayback Machine and writes results back to the store,
+        without the interactive session waiting for it.
+      </desc>
+      <defs>
+        <marker id="sarrow" viewBox="0 0 10 10" refX="8" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+          <path d="M0,0 L10,5 L0,10 z" fill="#bfc0c0" />
+        </marker>
+        <marker id="sarrow-coral" viewBox="0 0 10 10" refX="8" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+          <path d="M0,0 L10,5 L0,10 z" fill="#f08a59" />
+        </marker>
+      </defs>
+
+      <!-- Actor boxes -->
+      <g>
+        <rect x="24" y="24" width="120" height="40" rx="6" fill="#393e53" stroke="#f5f5f5" stroke-width="1" />
+        <text x="84" y="48" fill="#f5f5f5" font-size="13" font-weight="600" font-family="'Geist', sans-serif" text-anchor="middle">User</text>
+      </g>
+      <g>
+        <rect x="224" y="24" width="140" height="40" rx="6" fill="#393e53" stroke="#f5f5f5" stroke-width="1" />
+        <text x="294" y="48" fill="#f5f5f5" font-size="13" font-weight="600" font-family="'Geist', sans-serif" text-anchor="middle">Session</text>
+      </g>
+      <g>
+        <rect x="444" y="24" width="140" height="40" rx="6" fill="#393e53" stroke="#f08a59" stroke-width="1.2" />
+        <text x="514" y="48" fill="#f08a59" font-size="13" font-weight="600" font-family="'Geist', sans-serif" text-anchor="middle">Local Catalog</text>
+      </g>
+      <g>
+        <rect x="664" y="24" width="140" height="40" rx="6" fill="#393e53" stroke="#f5f5f5" stroke-width="1" />
+        <text x="734" y="48" fill="#f5f5f5" font-size="13" font-weight="600" font-family="'Geist', sans-serif" text-anchor="middle">Refresh Worker</text>
+      </g>
+      <g>
+        <rect x="816" y="24" width="120" height="40" rx="6" fill="#393e53" stroke="#bfc0c0" stroke-width="1" stroke-dasharray="4,3" />
+        <text x="876" y="48" fill="#f5f5f5" font-size="12" font-weight="600" font-family="'Geist', sans-serif" text-anchor="middle">Remote Source</text>
+      </g>
+
+      <!-- Lifelines -->
+      <line x1="84" y1="64" x2="84" y2="456" stroke="#bfc0c0" stroke-width="0.8" stroke-dasharray="3,3" />
+      <line x1="294" y1="64" x2="294" y2="456" stroke="#bfc0c0" stroke-width="0.8" stroke-dasharray="3,3" />
+      <line x1="514" y1="64" x2="514" y2="456" stroke="#bfc0c0" stroke-width="0.8" stroke-dasharray="3,3" />
+      <line x1="734" y1="64" x2="734" y2="456" stroke="#bfc0c0" stroke-width="0.8" stroke-dasharray="3,3" />
+      <line x1="876" y1="64" x2="876" y2="280" stroke="#bfc0c0" stroke-width="0.8" stroke-dasharray="3,3" />
+
+      <!-- Activation bars -->
+      <rect x="290" y="92" width="8" height="340" fill="#393e53" stroke="#bfc0c0" stroke-width="0.8" />
+      <rect x="510" y="112" width="8" height="40" fill="#393e53" stroke="#f08a59" stroke-width="0.8" />
+      <rect x="730" y="196" width="8" height="140" fill="#393e53" stroke="#bfc0c0" stroke-width="0.8" />
+      <rect x="872" y="236" width="8" height="40" fill="#393e53" stroke="#bfc0c0" stroke-width="0.8" />
+      <rect x="510" y="276" width="8" height="32" fill="#393e53" stroke="#bfc0c0" stroke-width="0.8" />
+
+      <!-- 1. User runs command -->
+      <path d="M 84,92 H 290" fill="none" stroke="#bfc0c0" stroke-width="1.2" marker-end="url(#sarrow)" />
+      <rect x="110" y="78" width="146" height="12" rx="2" fill="#2d3142" />
+      <text x="183" y="88" fill="#f5f5f5" font-size="10" font-family="'Geist Mono', monospace" text-anchor="middle">refranero (no args)</text>
+
+      <!-- 2. Session -> Store: read random -->
+      <path d="M 298,112 H 510" fill="none" stroke="#f08a59" stroke-width="1.2" marker-end="url(#sarrow-coral)" />
+      <rect x="356" y="98" width="96" height="12" rx="2" fill="#2d3142" />
+      <text x="404" y="108" fill="#f08a59" font-size="10" font-family="'Geist Mono', monospace" text-anchor="middle">SELECT random row</text>
+
+      <!-- 3. Store -> Session: return -->
+      <path d="M 510,144 H 298" fill="none" stroke="#bfc0c0" stroke-width="1" stroke-dasharray="4,3" marker-end="url(#sarrow)" />
+      <rect x="356" y="130" width="96" height="12" rx="2" fill="#2d3142" />
+      <text x="404" y="140" fill="#bfc0c0" font-size="10" font-family="'Geist Mono', monospace" text-anchor="middle">one saying</text>
+
+      <!-- 4. Session -> User: print -->
+      <path d="M 290,176 H 92" fill="none" stroke="#f08a59" stroke-width="1.2" marker-end="url(#sarrow-coral)" />
+      <rect x="110" y="162" width="166" height="12" rx="2" fill="#2d3142" />
+      <text x="193" y="172" fill="#f08a59" font-size="10" font-family="'Geist Mono', monospace" text-anchor="middle">print to terminal — done</text>
+
+      <!-- Combined fragment: stale cache check -->
+      <rect x="276" y="196" width="612" height="236" rx="4" fill="none" stroke="#bfc0c0" stroke-width="0.8" />
+      <path d="M 276,196 H 356 V 206 H 346 L 336 216 H 276 Z" fill="#393e53" stroke="#bfc0c0" stroke-width="0.8" />
+      <text x="286" y="208" fill="#f5f5f5" font-size="9" font-weight="600" font-family="'Geist Mono', monospace">ALT</text>
+      <text x="366" y="208" fill="#bfc0c0" font-size="9" font-family="'Geist', sans-serif">cache is stale and --offline was not set</text>
+
+      <!-- 5. Session spawns worker -->
+      <path d="M 298,236 H 730" fill="none" stroke="#bfc0c0" stroke-width="1" stroke-dasharray="4,3" marker-end="url(#sarrow)" />
+      <rect x="440" y="222" width="150" height="12" rx="2" fill="#2d3142" />
+      <text x="515" y="232" fill="#bfc0c0" font-size="10" font-family="'Geist Mono', monospace" text-anchor="middle">spawn detached worker</text>
+
+      <!-- 6. Worker -> Remote: fetch -->
+      <path d="M 738,252 H 872" fill="none" stroke="#bfc0c0" stroke-width="1.2" marker-end="url(#sarrow)" />
+      <rect x="760" y="238" width="90" height="12" rx="2" fill="#2d3142" />
+      <text x="805" y="248" fill="#f5f5f5" font-size="10" font-family="'Geist Mono', monospace" text-anchor="middle">HTTP GET page</text>
+
+      <!-- 7. Remote -> Worker: return -->
+      <path d="M 872,284 H 738" fill="none" stroke="#bfc0c0" stroke-width="1" stroke-dasharray="4,3" marker-end="url(#sarrow)" />
+      <rect x="760" y="270" width="90" height="12" rx="2" fill="#2d3142" />
+      <text x="805" y="280" fill="#bfc0c0" font-size="10" font-family="'Geist Mono', monospace" text-anchor="middle">HTML page</text>
+
+      <!-- 8. Worker -> Store: write -->
+      <path d="M 730,316 H 518" fill="none" stroke="#bfc0c0" stroke-width="1.2" marker-end="url(#sarrow)" />
+      <rect x="560" y="302" width="110" height="12" rx="2" fill="#2d3142" />
+      <text x="615" y="312" fill="#f5f5f5" font-size="10" font-family="'Geist Mono', monospace" text-anchor="middle">INSERT new sayings</text>
+
+      <!-- else: offline or fresh -->
+      <line x1="276" y1="344" x2="888" y2="344" stroke="#bfc0c0" stroke-width="0.8" stroke-dasharray="4,3" />
+      <text x="286" y="358" fill="#bfc0c0" font-size="9" font-weight="600" font-family="'Geist Mono', monospace">[ELSE]</text>
+      <text x="356" y="358" fill="#bfc0c0" font-size="9" font-family="'Geist', sans-serif">cache is fresh, or --offline was set</text>
+
+      <!-- 9. no-op -->
+      <path d="M 510,392 H 302 Q 294,392 294,400 V 404 Q 294,412 302,412 H 440" fill="none" stroke="#8e98ac" stroke-width="1" stroke-dasharray="2,3" marker-end="url(#sarrow)" />
+      <rect x="320" y="394" width="150" height="12" rx="2" fill="#2d3142" />
+      <text x="395" y="404" fill="#8e98ac" font-size="10" font-family="'Geist Mono', monospace" text-anchor="middle">no refresh scheduled</text>
+
+      <!-- Legend -->
+      <line x1="24" y1="456" x2="936" y2="456" stroke="rgba(245,245,245,0.10)" stroke-width="0.8" />
+      <text x="24" y="472" fill="#bfc0c0" font-size="8" font-family="'Geist Mono', monospace" letter-spacing="0.14em">LEGEND</text>
+
+      <line x1="130" y1="468" x2="158" y2="468" stroke="#bfc0c0" stroke-width="1.2" marker-end="url(#sarrow)" />
+      <text x="166" y="472" fill="#bfc0c0" font-size="10" font-family="'Geist', sans-serif">Call</text>
+
+      <line x1="230" y1="468" x2="258" y2="468" stroke="#bfc0c0" stroke-width="1" stroke-dasharray="4,3" marker-end="url(#sarrow)" />
+      <text x="266" y="472" fill="#bfc0c0" font-size="10" font-family="'Geist', sans-serif">Return / async</text>
+
+      <line x1="404" y1="468" x2="432" y2="468" stroke="#f08a59" stroke-width="1.2" marker-end="url(#sarrow-coral)" />
+      <text x="440" y="472" fill="#bfc0c0" font-size="10" font-family="'Geist', sans-serif">Critical path (blocking, fast)</text>
+
+      <rect x="684" y="462" width="80" height="12" rx="2" fill="none" stroke="#bfc0c0" stroke-width="0.8" />
+      <text x="772" y="472" fill="#bfc0c0" font-size="10" font-family="'Geist', sans-serif">Combined fragment (alt)</text>
+    </svg>
+  </div>
+
+  <div class="cards">
+    <div class="card">
+      <div class="card-header"><span class="card-dot coral"></span><h3>Fast path — what you always get</h3></div>
+      <ul>
+        <li>The terminal prints a result in one SQLite read, with no network round-trip.</li>
+        <li>Example row returned: "Más vale pájaro en mano que ciento volando" (category
+          <code>refran</code>).</li>
+      </ul>
+    </div>
+    <div class="card">
+      <div class="card-header"><span class="card-dot muted"></span><h3>Background path — kept out of your way</h3></div>
+      <ul>
+        <li>A refresh worker only starts when the cached snapshot is older than its interval.</li>
+        <li>It takes a time-boxed lease, so two overlapping runs cannot race each other.</li>
+        <li><code>--offline</code> disables this path entirely for that invocation.</li>
+      </ul>
+    </div>
+  </div>
+
+  <footer>
+    <span>refranero · reading flow</span>
+    <span>source: src/session.rs, store.rs, refresh.rs, ingest.rs</span>
+  </footer>
+</div>
+</body>
+</html>
