@@ -28,6 +28,9 @@ struct Cli {
     /// Language code (for example es, en or ca). The starter catalog is mostly Spanish.
     #[arg(long, global = true, default_value = "es")]
     lang: String,
+    /// Interface language. Defaults to the supported system locale, or Spanish.
+    #[arg(long, global = true, value_enum)]
+    ui_lang: Option<presentation::UiLanguage>,
     /// Limit results to one paremiological category.
     #[arg(long, global = true, value_enum)]
     category: Option<Category>,
@@ -109,6 +112,7 @@ enum SyncSource {
 
 fn main() -> Result<()> {
     let cli = Cli::parse();
+    let ui_language = presentation::resolve_ui_language(cli.ui_lang, |name| std::env::var_os(name));
     let db = match cli.db.as_ref() {
         Some(path) => path.clone(),
         None => dirs::data_local_dir()
@@ -127,10 +131,10 @@ fn main() -> Result<()> {
                 // Launch the worker before entering the alternate screen so warnings stay visible
                 // and the catalog keeps updating while the reader is open.
                 schedule_background_refresh(&cli, &db, &mut store, true);
-                session::Session::start(&store, &cli.lang, cli.category, cli.color)
+                session::Session::start(&store, &cli.lang, cli.category, cli.color, ui_language)
                     .and_then(|mut session| session.run())
             } else {
-                let result = random(&cli, &store);
+                let result = random(&cli, &store, ui_language);
                 if result.is_ok() {
                     schedule_background_refresh(&cli, &db, &mut store, false);
                 }
@@ -155,7 +159,8 @@ fn main() -> Result<()> {
             if cli.json {
                 println!("{}", serde_json::to_string_pretty(&entry)?);
             } else {
-                let options = presentation::detect(cli.color);
+                let mut options = presentation::detect(cli.color);
+                options.language = ui_language;
                 println!(
                     "{}",
                     presentation::render(std::slice::from_ref(&entry), &options)
@@ -428,7 +433,7 @@ fn interactive_reader(cli: &Cli) -> bool {
         && std::io::stdout().is_terminal()
 }
 
-fn random(cli: &Cli, store: &Store) -> Result<()> {
+fn random(cli: &Cli, store: &Store, ui_language: presentation::UiLanguage) -> Result<()> {
     if !(1..=20).contains(&cli.count) {
         bail!("--count must be between 1 and 20");
     }
@@ -445,7 +450,8 @@ fn random(cli: &Cli, store: &Store) -> Result<()> {
     if cli.json {
         println!("{}", serde_json::to_string_pretty(&sayings)?);
     } else {
-        let options = presentation::detect(cli.color);
+        let mut options = presentation::detect(cli.color);
+        options.language = ui_language;
         println!("{}", presentation::render(&sayings, &options));
     }
     if cli.browser {
