@@ -1,5 +1,17 @@
 # Changelog
 
+## [0.6.0](https://github.com/yacosta738/refranero/compare/v0.5.0...v0.6.0) (2026-11-04)
+
+
+### Features
+
+* **distribution:** add release tarballs and homebrew tap support ([652e15e](https://github.com/yacosta738/refranero/commit/652e15e30a12a1017a273177c88b3d0723273624))
+
+
+### Chores
+
+* **deps:** update github artifact actions ([#40](https://github.com/yacosta738/refranero/issues/40)) ([960b15c](https://github.com/yacosta738/refranero/commit/960b15cf6f905c919ad31c93fba9486ce42affb9))
+
 ## [0.5.0](https://github.com/yacosta738/refranero/compare/v0.4.0...v0.5.0) (2026-11-04)
 
 
