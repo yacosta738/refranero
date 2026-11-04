@@ -423,14 +423,39 @@ mod tests {
         assert_eq!(resolve_ui_language(None, lang), UiLanguage::English);
     }
 
-    #[test]
-    fn a_non_utf8_locale_still_decides() {
+    /// Build a locale value that the interface cannot read as a language name.
+    #[cfg(unix)]
+    fn undecodable_locale() -> OsString {
         use std::os::unix::ffi::OsStringExt;
 
-        // `LC_ALL` holds bytes that are not valid UTF-8 and `LANG` would select English:
-        // the set `LC_ALL` decides, and it cannot name a language, so Spanish is selected.
+        // `fr_FR` followed by a byte that is not valid UTF-8.
+        OsString::from_vec(vec![b'f', b'r', b'_', b'F', b'R', 0xff])
+    }
+
+    /// Build a locale value that the interface cannot read as a language name.
+    #[cfg(windows)]
+    fn undecodable_locale() -> OsString {
+        use std::os::windows::ffi::OsStringExt;
+
+        // `fr_FR` followed by an unpaired surrogate, which is not valid UTF-8 either.
+        OsString::from_wide(&[0x0066, 0x0072, 0x005f, 0x0046, 0x0052, 0xd800])
+    }
+
+    /// Build a locale value that the interface cannot read as a language name.
+    #[cfg(not(any(unix, windows)))]
+    fn undecodable_locale() -> OsString {
+        // Other platforms have no way to build an undecodable value, so the test
+        // relies on a locale that simply does not name a language.
+        OsString::from("fr_FR.UTF-8")
+    }
+
+    #[test]
+    fn an_undecodable_locale_still_decides() {
+        // `LC_ALL` holds a value that cannot name a language and `LANG` would select
+        // English: the set `LC_ALL` decides, and it cannot name a language, so Spanish
+        // is selected.
         let lookup = |name: &str| match name {
-            "LC_ALL" => Some(OsString::from_vec(vec![b'f', b'r', b'_', b'F', b'R', 0xff])),
+            "LC_ALL" => Some(undecodable_locale()),
             "LANG" => Some(OsString::from("en_US.UTF-8")),
             _ => None,
         };
