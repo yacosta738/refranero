@@ -1,5 +1,17 @@
 # Changelog
 
+## [0.6.1](https://github.com/yacosta738/refranero/compare/v0.6.0...v0.6.1) (2026-11-04)
+
+
+### Bug Fixes
+
+* **deps:** override vulnerable re2js and katex dependencies ([#43](https://github.com/yacosta738/refranero/issues/43)) ([c524d58](https://github.com/yacosta738/refranero/commit/c524d58f2019daebb85d4f1dc7d8ae44eb30e4bc))
+
+
+### Documentation
+
+* **diagrams:** add system diagrams and link them from the README ([#41](https://github.com/yacosta738/refranero/issues/41)) ([0b2c648](https://github.com/yacosta738/refranero/commit/0b2c648c11ac2d3b88650db959353a5c41c59d9b))
+
 ## [0.6.0](https://github.com/yacosta738/refranero/compare/v0.5.0...v0.6.0) (2026-11-04)
 
 
