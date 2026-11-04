@@ -1,5 +1,27 @@
 # Changelog
 
+## [0.5.0](https://github.com/yacosta738/refranero/compare/v0.4.0...v0.5.0) (2026-11-04)
+
+
+### Features
+
+* **agents:** add AgentSync configuration and AGENTS.md for AI agent management ([ed8b538](https://github.com/yacosta738/refranero/commit/ed8b5384986fc6e5b53c5a60def18ea763a48ddb))
+* **cli:** interactive reader with presentation layer and live refresh ([#33](https://github.com/yacosta738/refranero/issues/33)) ([254edd3](https://github.com/yacosta738/refranero/commit/254edd3fde4450d553edf348969717cd33f93f1a))
+* **tui:** add bilingual interface with --ui-lang ([#36](https://github.com/yacosta738/refranero/issues/36)) ([a101c12](https://github.com/yacosta738/refranero/commit/a101c12688281c6639006c5b7537cf753c83402a))
+
+
+### Bug Fixes
+
+* **ci:** reduce macOS ARM runner dependency ([#31](https://github.com/yacosta738/refranero/issues/31)) ([5277243](https://github.com/yacosta738/refranero/commit/5277243b9b5e89915fd0feef3e7f820c401734d2))
+* **ci:** use package.json packageManager as the single pnpm version source ([445c92c](https://github.com/yacosta738/refranero/commit/445c92c1dab75d02e52b0ee505ed65934f3a3501))
+
+
+### Chores
+
+* **deps:** pin pnpm/action-setup action to b906aff ([#34](https://github.com/yacosta738/refranero/issues/34)) ([ce4a16b](https://github.com/yacosta738/refranero/commit/ce4a16b2b57389a3e93c381a5b09df0eef808453))
+* **deps:** update npm dependencies (non-major) ([#35](https://github.com/yacosta738/refranero/issues/35)) ([25e9b12](https://github.com/yacosta738/refranero/commit/25e9b120b9328b648c8af1a33fa79918745798a7))
+* **deps:** update pnpm/action-setup action to v6 ([#38](https://github.com/yacosta738/refranero/issues/38)) ([b7a21bf](https://github.com/yacosta738/refranero/commit/b7a21bf08f9e522baaed314fab2960f1a0aa9996))
+
 ## [0.4.0](https://github.com/yacosta738/refranero/compare/v0.3.2...v0.4.0) (2026-11-02)
 
 
