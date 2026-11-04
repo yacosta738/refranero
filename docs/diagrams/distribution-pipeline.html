@@ -1,0 +1,312 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>Refranero — Build &amp; Distribution</title>
+<style>
+  @import url('https://fonts.googleapis.com/css2?family=Instrument+Serif:ital@0;1&family=Geist:wght@400;500;600&family=Geist+Mono:wght@400;500&display=swap');
+
+  :root {
+    --paper: #2d3142;
+    --paper-2: #393e53;
+    --ink: #f5f5f5;
+    --muted: #bfc0c0;
+    --soft: #8e98ac;
+    --rule: rgba(245,245,245,0.12);
+    --accent: #f08a59;
+  }
+
+  * { box-sizing: border-box; }
+  body { margin: 0; background: var(--paper); color: var(--ink); font-family: 'Geist', sans-serif; }
+  .page { max-width: 1080px; margin: 0 auto; padding: 48px 32px 32px; }
+
+  .eyebrow {
+    font-family: 'Geist Mono', monospace;
+    font-size: 11px;
+    letter-spacing: 0.14em;
+    text-transform: uppercase;
+    color: var(--soft);
+    margin: 0 0 8px;
+  }
+
+  h1 {
+    font-family: 'Instrument Serif', serif;
+    font-weight: 400;
+    font-size: 40px;
+    margin: 0 0 8px;
+    line-height: 1.1;
+  }
+
+  .subtitle {
+    font-size: 15px;
+    color: var(--muted);
+    margin: 0 0 32px;
+    max-width: 760px;
+    line-height: 1.5;
+  }
+
+  .diagram { width: 100%; overflow-x: auto; }
+  .diagram svg { display: block; width: 100%; height: auto; min-width: 720px; }
+
+  .cards {
+    display: grid;
+    grid-template-columns: 1fr 1fr 1fr;
+    gap: 16px;
+    margin-top: 32px;
+  }
+
+  /* Responsive: the figure keeps a legibility floor and scrolls inside its container */
+  @media (max-width: 1024px) {
+    .page { padding: 44px 24px 32px; }
+    .cards { grid-template-columns: 1fr 1fr; }
+  }
+
+  @media (max-width: 720px) {
+    .page { padding: 32px 16px 24px; }
+    h1 { font-size: 30px; }
+    .subtitle { font-size: 14px; margin-bottom: 24px; }
+    .cards { grid-template-columns: 1fr; gap: 14px; }
+    .card { padding: 16px 18px; }
+    footer { margin-top: 28px; }
+  }
+
+  .card { background: #393e53; border: 1px solid var(--rule); border-radius: 6px; padding: 1.25rem; }
+  .card-header { display: flex; align-items: center; gap: 8px; margin-bottom: 10px; }
+  .card-dot { width: 7px; height: 7px; border-radius: 50%; flex: none; }
+  .card-dot.coral { background: var(--accent); }
+  .card-dot.ink { background: var(--ink); }
+  .card-dot.muted { background: var(--muted); }
+  .card h3 { font-size: 15px; font-weight: 600; margin: 0; }
+  .card ul { margin: 0; padding-left: 18px; font-size: 13px; color: var(--muted); line-height: 1.6; }
+  .card ul li { margin-bottom: 4px; }
+
+  footer {
+    margin-top: 40px;
+    padding-top: 16px;
+    border-top: 1px solid var(--rule);
+    font-family: 'Geist Mono', monospace;
+    font-size: 11px;
+    color: var(--soft);
+    display: flex;
+    justify-content: space-between;
+    flex-wrap: wrap;
+    gap: 8px;
+  }
+</style>
+</head>
+<body>
+<div class="page">
+  <p class="eyebrow">Refranero CLI · Distribution</p>
+  <h1>From source to three install paths</h1>
+  <p class="subtitle">
+    One Rust source tree, one release workflow, three ways to install the same binary:
+    <code>cargo install</code>, <code>npm install</code>, or <code>docker run</code>. The npm
+    package never downloads a binary at install time — it only dispatches to a platform package
+    chosen ahead of time.
+  </p>
+
+  <div class="diagram">
+    <svg viewBox="0 0 980 600" role="img" aria-labelledby="dist-title dist-desc">
+      <title id="dist-title">Refranero build and distribution pipeline</title>
+      <desc id="dist-desc">
+        The Rust source repository feeds a single release workflow in GitHub Actions. On a tagged
+        release, four native runners build the binary for Linux and macOS on x64 and arm64;
+        Windows on x64 and arm64 builds natively inside the npm publish job instead of being
+        cross-compiled ahead of time. The workflow then publishes three parallel outputs: the
+        crate to crates.io for cargo install, six native npm platform packages plus a thin Node
+        wrapper to the npm registry for npm install, and a multi-architecture image to a container
+        registry for docker run. End users reach the same compiled binary through whichever path
+        they prefer.
+      </desc>
+      <defs>
+        <marker id="darrow" viewBox="0 0 10 10" refX="8" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+          <path d="M0,0 L10,5 L0,10 z" fill="#bfc0c0" />
+        </marker>
+        <marker id="darrow-coral" viewBox="0 0 10 10" refX="8" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+          <path d="M0,0 L10,5 L0,10 z" fill="#f08a59" />
+        </marker>
+      </defs>
+
+      <!-- Zone: Build -->
+      <rect x="32" y="56" width="280" height="200" rx="8" fill="rgba(245,245,245,0.02)" stroke="rgba(245,245,245,0.10)" stroke-width="0.8" />
+      <rect x="48" y="60" width="200" height="12" rx="2" fill="#2d3142" />
+      <text x="148" y="69" fill="rgba(245,245,245,0.40)" font-size="7" font-family="'Geist Mono', monospace" text-anchor="middle" letter-spacing="0.12em">SOURCE &amp; CI</text>
+
+      <!-- Zone: Publish -->
+      <rect x="344" y="56" width="280" height="420" rx="8" fill="rgba(245,245,245,0.02)" stroke="rgba(245,245,245,0.10)" stroke-width="0.8" />
+      <rect x="360" y="60" width="128" height="12" rx="2" fill="#2d3142" />
+      <text x="424" y="69" fill="rgba(245,245,245,0.40)" font-size="7" font-family="'Geist Mono', monospace" text-anchor="middle" letter-spacing="0.12em">RELEASE WORKFLOW</text>
+
+      <!-- Zone: Registries -->
+      <rect x="656" y="56" width="140" height="420" rx="8" fill="rgba(245,245,245,0.02)" stroke="rgba(245,245,245,0.10)" stroke-width="0.8" stroke-dasharray="4,3" />
+      <rect x="668" y="60" width="116" height="12" rx="2" fill="#2d3142" />
+      <text x="726" y="69" fill="rgba(245,245,245,0.40)" font-size="7" font-family="'Geist Mono', monospace" text-anchor="middle" letter-spacing="0.12em">REGISTRIES</text>
+
+      <!-- Zone: End users -->
+      <rect x="828" y="56" width="128" height="420" rx="8" fill="rgba(245,245,245,0.02)" stroke="rgba(245,245,245,0.10)" stroke-width="0.8" stroke-dasharray="4,3" />
+      <rect x="840" y="60" width="104" height="12" rx="2" fill="#2d3142" />
+      <text x="892" y="69" fill="rgba(245,245,245,0.40)" font-size="7" font-family="'Geist Mono', monospace" text-anchor="middle" letter-spacing="0.12em">END USER</text>
+
+      <!-- Arrows -->
+      <!-- Repo -> Build binaries -->
+      <path d="M 192,112 V 150" fill="none" stroke="#bfc0c0" stroke-width="1.2" marker-end="url(#darrow)" />
+
+      <!-- Build binaries -> publish zone: tagged release triggers all 3 publish jobs -->
+      <path d="M 192,226 H 404 Q 412,226 412,234 V 240" fill="none" stroke="#f08a59" stroke-width="1.2" marker-end="url(#darrow-coral)" />
+      <path d="M 192,190 V 368 H 364" fill="none" stroke="#f08a59" stroke-width="1.2" marker-end="url(#darrow-coral)" />
+      <path d="M 160,248 V 432 H 364" fill="none" stroke="#f08a59" stroke-width="1.2" marker-end="url(#darrow-coral)" />
+      <rect x="248" y="214" width="110" height="12" rx="2" fill="#2d3142" />
+      <text x="303" y="223" fill="#f08a59" font-size="8" font-family="'Geist Mono', monospace" text-anchor="middle" letter-spacing="0.04em">on tagged release</text>
+
+      <!-- publish crate -> crates.io -->
+      <path d="M 464,280 H 656" fill="none" stroke="#bfc0c0" stroke-width="1.2" marker-end="url(#darrow)" />
+      <rect x="520" y="266" width="84" height="12" rx="2" fill="#2d3142" />
+      <text x="562" y="275" fill="#8e98ac" font-size="8" font-family="'Geist Mono', monospace" text-anchor="middle">cargo publish</text>
+
+      <!-- publish npm -> npm registry -->
+      <path d="M 464,392 H 656" fill="none" stroke="#bfc0c0" stroke-width="1.2" marker-end="url(#darrow)" />
+      <rect x="520" y="378" width="84" height="12" rx="2" fill="#2d3142" />
+      <text x="562" y="387" fill="#8e98ac" font-size="8" font-family="'Geist Mono', monospace" text-anchor="middle">npm publish</text>
+
+      <!-- publish docker -> container registry -->
+      <path d="M 464,456 H 656" fill="none" stroke="#bfc0c0" stroke-width="1.2" marker-end="url(#darrow)" />
+      <rect x="520" y="442" width="84" height="12" rx="2" fill="#2d3142" />
+      <text x="562" y="451" fill="#8e98ac" font-size="8" font-family="'Geist Mono', monospace" text-anchor="middle">build-push</text>
+
+      <!-- registries -> end users -->
+      <path d="M 796,280 H 828" fill="none" stroke="#bfc0c0" stroke-width="1.2" marker-end="url(#darrow)" />
+      <path d="M 796,392 H 828" fill="none" stroke="#bfc0c0" stroke-width="1.2" marker-end="url(#darrow)" />
+      <path d="M 796,456 H 828" fill="none" stroke="#bfc0c0" stroke-width="1.2" marker-end="url(#darrow)" />
+
+      <!-- Nodes: Build zone -->
+      <g>
+        <rect x="152" y="80" width="80" height="32" rx="6" fill="#2d3142" />
+        <rect x="152" y="80" width="80" height="32" rx="6" fill="#393e53" stroke="#f5f5f5" stroke-width="1" />
+        <text x="192" y="100" fill="#f5f5f5" font-size="11" font-weight="600" font-family="'Geist', sans-serif" text-anchor="middle">Source Repo</text>
+      </g>
+      <g>
+        <rect x="128" y="150" width="128" height="40" rx="6" fill="#2d3142" />
+        <rect x="128" y="150" width="128" height="40" rx="6" fill="#393e53" stroke="#f5f5f5" stroke-width="1" />
+        <text x="192" y="166" fill="#f5f5f5" font-size="11" font-weight="600" font-family="'Geist', sans-serif" text-anchor="middle">Build binaries</text>
+        <text x="192" y="180" fill="#bfc0c0" font-size="8" font-family="'Geist Mono', monospace" text-anchor="middle">4 native runners</text>
+      </g>
+      <g>
+        <rect x="64" y="208" width="128" height="40" rx="6" fill="#2d3142" />
+        <rect x="64" y="208" width="128" height="40" rx="6" fill="#393e53" stroke="#f5f5f5" stroke-width="1" />
+        <text x="128" y="224" fill="#f5f5f5" font-size="11" font-weight="600" font-family="'Geist', sans-serif" text-anchor="middle">CI checks</text>
+        <text x="128" y="238" fill="#bfc0c0" font-size="8" font-family="'Geist Mono', monospace" text-anchor="middle">fmt, clippy, tests</text>
+      </g>
+
+      <!-- Nodes: Publish zone (3 parallel jobs) -->
+      <g>
+        <rect x="364" y="240" width="100" height="56" rx="6" fill="#2d3142" />
+        <rect x="364" y="240" width="100" height="56" rx="6" fill="#393e53" stroke="#f08a59" stroke-width="1.2" />
+        <text x="414" y="262" fill="#f5f5f5" font-size="11" font-weight="600" font-family="'Geist', sans-serif" text-anchor="middle">Publish crate</text>
+        <text x="414" y="276" fill="#bfc0c0" font-size="8" font-family="'Geist Mono', monospace" text-anchor="middle">refranero-cli</text>
+        <text x="414" y="288" fill="#bfc0c0" font-size="8" font-family="'Geist Mono', monospace" text-anchor="middle">job</text>
+      </g>
+      <g>
+        <rect x="364" y="340" width="100" height="56" rx="6" fill="#2d3142" />
+        <rect x="364" y="340" width="100" height="56" rx="6" fill="#393e53" stroke="#f08a59" stroke-width="1.2" />
+        <text x="414" y="362" fill="#f5f5f5" font-size="11" font-weight="600" font-family="'Geist', sans-serif" text-anchor="middle">Publish npm</text>
+        <text x="414" y="376" fill="#bfc0c0" font-size="8" font-family="'Geist Mono', monospace" text-anchor="middle">wrapper + 6</text>
+        <text x="414" y="388" fill="#bfc0c0" font-size="8" font-family="'Geist Mono', monospace" text-anchor="middle">platform pkgs</text>
+      </g>
+      <g>
+        <rect x="364" y="404" width="100" height="56" rx="6" fill="#2d3142" />
+        <rect x="364" y="404" width="100" height="56" rx="6" fill="#393e53" stroke="#f08a59" stroke-width="1.2" />
+        <text x="414" y="426" fill="#f5f5f5" font-size="11" font-weight="600" font-family="'Geist', sans-serif" text-anchor="middle">Publish Docker</text>
+        <text x="414" y="440" fill="#bfc0c0" font-size="8" font-family="'Geist Mono', monospace" text-anchor="middle">multi-arch</text>
+        <text x="414" y="452" fill="#bfc0c0" font-size="8" font-family="'Geist Mono', monospace" text-anchor="middle">image</text>
+      </g>
+
+      <!-- Nodes: Registries -->
+      <g>
+        <rect x="676" y="252" width="100" height="56" rx="6" fill="#393e53" stroke="#bfc0c0" stroke-width="1" stroke-dasharray="4,3" />
+        <text x="726" y="276" fill="#f5f5f5" font-size="11" font-weight="600" font-family="'Geist', sans-serif" text-anchor="middle">crates.io</text>
+        <text x="726" y="292" fill="#bfc0c0" font-size="8" font-family="'Geist Mono', monospace" text-anchor="middle">refranero-cli</text>
+      </g>
+      <g>
+        <rect x="676" y="364" width="100" height="56" rx="6" fill="#393e53" stroke="#bfc0c0" stroke-width="1" stroke-dasharray="4,3" />
+        <text x="726" y="388" fill="#f5f5f5" font-size="11" font-weight="600" font-family="'Geist', sans-serif" text-anchor="middle">npm registry</text>
+        <text x="726" y="404" fill="#bfc0c0" font-size="8" font-family="'Geist Mono', monospace" text-anchor="middle">@yacosta738/*</text>
+      </g>
+      <g>
+        <rect x="676" y="428" width="100" height="56" rx="6" fill="#393e53" stroke="#bfc0c0" stroke-width="1" stroke-dasharray="4,3" />
+        <text x="726" y="452" fill="#f5f5f5" font-size="11" font-weight="600" font-family="'Geist', sans-serif" text-anchor="middle">Docker Hub</text>
+        <text x="726" y="468" fill="#bfc0c0" font-size="8" font-family="'Geist Mono', monospace" text-anchor="middle">yacosta738/refranero</text>
+      </g>
+
+      <!-- Nodes: End user -->
+      <g>
+        <rect x="844" y="252" width="96" height="56" rx="6" fill="#2d3142" />
+        <rect x="844" y="252" width="96" height="56" rx="6" fill="#393e53" stroke="#f5f5f5" stroke-width="1" />
+        <text x="892" y="274" fill="#f5f5f5" font-size="10" font-weight="600" font-family="'Geist', sans-serif" text-anchor="middle">cargo install</text>
+        <text x="892" y="290" fill="#bfc0c0" font-size="8" font-family="'Geist Mono', monospace" text-anchor="middle">refranero-cli</text>
+      </g>
+      <g>
+        <rect x="844" y="364" width="96" height="56" rx="6" fill="#2d3142" />
+        <rect x="844" y="364" width="96" height="56" rx="6" fill="#393e53" stroke="#f5f5f5" stroke-width="1" />
+        <text x="892" y="386" fill="#f5f5f5" font-size="10" font-weight="600" font-family="'Geist', sans-serif" text-anchor="middle">npm install -g</text>
+        <text x="892" y="402" fill="#bfc0c0" font-size="8" font-family="'Geist Mono', monospace" text-anchor="middle">@yacosta738/refranero</text>
+      </g>
+      <g>
+        <rect x="844" y="428" width="96" height="56" rx="6" fill="#2d3142" />
+        <rect x="844" y="428" width="96" height="56" rx="6" fill="#393e53" stroke="#f5f5f5" stroke-width="1" />
+        <text x="892" y="450" fill="#f5f5f5" font-size="10" font-weight="600" font-family="'Geist', sans-serif" text-anchor="middle">docker run</text>
+        <text x="892" y="466" fill="#bfc0c0" font-size="8" font-family="'Geist Mono', monospace" text-anchor="middle">yacosta738/refranero</text>
+      </g>
+
+      <!-- Note: npm wrapper dispatch (no download at install) -->
+      <rect x="664" y="500" width="300" height="56" rx="6" fill="none" stroke="#8e98ac" stroke-width="0.8" stroke-dasharray="2,3" />
+      <text x="676" y="518" fill="#bfc0c0" font-size="9" font-weight="600" font-family="'Geist Mono', monospace">NOTE</text>
+      <text x="676" y="534" fill="#bfc0c0" font-size="9" font-family="'Geist', sans-serif">The npm wrapper only dispatches to the</text>
+      <text x="676" y="548" fill="#bfc0c0" font-size="9" font-family="'Geist', sans-serif">matching native package — no postinstall download.</text>
+
+      <!-- Legend -->
+      <line x1="32" y1="564" x2="636" y2="564" stroke="rgba(245,245,245,0.10)" stroke-width="0.8" />
+      <text x="32" y="580" fill="#bfc0c0" font-size="8" font-family="'Geist Mono', monospace" letter-spacing="0.14em">LEGEND</text>
+
+      <line x1="140" y1="576" x2="168" y2="576" stroke="#bfc0c0" stroke-width="1.2" marker-end="url(#darrow)" />
+      <text x="176" y="580" fill="#bfc0c0" font-size="10" font-family="'Geist', sans-serif">Build / publish step</text>
+
+      <line x1="360" y1="576" x2="388" y2="576" stroke="#f08a59" stroke-width="1.2" marker-end="url(#darrow-coral)" />
+      <text x="396" y="580" fill="#bfc0c0" font-size="10" font-family="'Geist', sans-serif">Release trigger (tagged version)</text>
+    </svg>
+  </div>
+
+  <div class="cards">
+    <div class="card">
+      <div class="card-header"><span class="card-dot coral"></span><h3>One trigger, three publish jobs</h3></div>
+      <ul>
+        <li>A tagged release builds Linux and macOS binaries on 4 native runners (x64/arm64).</li>
+        <li>Windows x64/arm64 builds natively inside the npm publish job, not ahead of time.</li>
+        <li>Only the npm packages use prebuilt binaries; crates.io and Docker build from source.</li>
+        <li>A recovery <code>workflow_dispatch</code> with a release tag skips registry publishing.</li>
+      </ul>
+    </div>
+    <div class="card">
+      <div class="card-header"><span class="card-dot ink"></span><h3>npm is a thin dispatcher</h3></div>
+      <ul>
+        <li><code>npm/wrapper</code> ships a small launcher script, no binary inside it.</li>
+        <li>It resolves and runs the one optional native package matching the user's OS/CPU.</li>
+        <li><code>scripts/prepare-npm.mjs</code> holds the platform map used to build the packages.</li>
+      </ul>
+    </div>
+    <div class="card">
+      <div class="card-header"><span class="card-dot muted"></span><h3>Supported platforms</h3></div>
+      <ul>
+        <li>macOS, Linux (glibc), Windows — each on x64 and arm64.</li>
+        <li>Linux musl is intentionally not a configured target.</li>
+      </ul>
+    </div>
+  </div>
+
+  <footer>
+    <span>refranero · build &amp; distribution</span>
+    <span>source: .github/workflows/release.yml, scripts/prepare-npm.mjs, npm/wrapper</span>
+  </footer>
+</div>
+</body>
+</html>
