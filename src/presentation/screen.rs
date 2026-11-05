@@ -135,6 +135,7 @@ fn help_lines(theme: &Theme, width: usize, catalog: Catalog) -> Vec<String> {
         ("h", catalog.text(Message::HelpPreviousShort)),
         ("c", catalog.text(Message::HelpCategoryShort)),
         ("o", catalog.text(Message::HelpOpenShort)),
+        ("u", catalog.text(Message::HelpUpdateShort)),
         ("?", catalog.text(Message::HelpCloseShort)),
         ("q", catalog.text(Message::HelpQuitShort)),
     ];
@@ -153,6 +154,7 @@ fn help_lines(theme: &Theme, width: usize, catalog: Catalog) -> Vec<String> {
         ),
         ("c", catalog.text(Message::HelpCategoryLong)),
         ("o", catalog.text(Message::HelpOpenLong)),
+        ("u", catalog.text(Message::HelpUpdateLong)),
         ("?", catalog.text(Message::HelpCloseLong)),
         (
             catalog.text(Message::HelpQuitKeys),
@@ -249,41 +251,24 @@ fn footer(width: usize, next_language: Option<&str>, theme: &Theme, catalog: Cat
         || catalog.text(Message::FooterLanguage).to_owned(),
         |code| format!("{}→{code}", catalog.text(Message::FooterLanguage)),
     );
+    let next = catalog.text(Message::FooterNext);
+    let open = catalog.text(Message::FooterOpen);
+    let category = catalog.text(Message::FooterCategory);
+    let help = catalog.text(Message::FooterHelp);
+    let update = catalog.text(Message::FooterUpdate);
+    let quit = catalog.text(Message::FooterQuit);
     let candidates = [
-        format!(
-            "{} · {} · {language} · {} · {} · {}",
-            catalog.text(Message::FooterNext),
-            catalog.text(Message::FooterOpen),
-            catalog.text(Message::FooterCategory),
-            catalog.text(Message::FooterHelp),
-            catalog.text(Message::FooterQuit)
-        ),
-        format!(
-            "{} · {} · {language} · {} · {}",
-            catalog.text(Message::FooterNext),
-            catalog.text(Message::FooterOpen),
-            catalog.text(Message::FooterHelp),
-            catalog.text(Message::FooterQuit)
-        ),
-        format!(
-            "{} · {} · {} · {}",
-            catalog.text(Message::FooterNext),
-            catalog.text(Message::FooterOpen),
-            catalog.text(Message::FooterLanguage),
-            catalog.text(Message::FooterQuit)
-        ),
-        format!(
-            "{} · {} · l/h · ? · q",
-            catalog.text(Message::FooterNext),
-            catalog.text(Message::FooterOpen)
-        ),
-        "n·o·l/h·?·q".to_owned(),
+        format!("{next} · {open} · {language} · {category} · {help} · {update} · {quit}"),
+        format!("{next} · {open} · {language} · {help} · {update} · {quit}"),
+        format!("{next} · {language} · {help} · {update} · {quit}"),
+        format!("{next} · {open} · l/h · u · ? · q"),
+        "n·o·u·l/h·?·q".to_owned(),
     ];
     let budget = width.saturating_sub(2);
     let text = candidates
         .into_iter()
         .find(|candidate| display_width(candidate) <= budget)
-        .unwrap_or_else(|| "n·o·l/h·?·q".to_owned());
+        .unwrap_or_else(|| "n·o·u·l/h·?·q".to_owned());
     theme.meta(&format!("  {text}"))
 }
 
@@ -406,6 +391,35 @@ mod tests {
     }
 
     #[test]
+    fn help_lists_the_manual_update_action() {
+        let entry = saying("A quien madruga, Dios le ayuda.");
+        let mut options = screen(&entry, 80, 24);
+        options.help = true;
+        let frame = compose(&options);
+        assert!(frame.contains("Actualizar el catálogo"), "{frame}");
+        assert!(frame.contains('u'), "{frame}");
+    }
+
+    #[test]
+    fn english_help_lists_the_manual_update_action() {
+        let entry = saying("A quien madruga, Dios le ayuda.");
+        let mut options = screen_in(&entry, 80, 24, UiLanguage::English);
+        options.help = true;
+        let frame = compose(&options);
+        assert!(frame.contains("Update the catalog"), "{frame}");
+    }
+
+    #[test]
+    fn footer_advertises_the_manual_update_action() {
+        let entry = saying("A quien madruga, Dios le ayuda.");
+        let frame = compose(&screen(&entry, 80, 24));
+        assert!(frame.contains("u actualizar"), "{frame}");
+
+        let english = compose(&screen_in(&entry, 80, 24, UiLanguage::English));
+        assert!(english.contains("u update"), "{english}");
+    }
+
+    #[test]
     fn progress_bar_fills_with_completion() {
         let entry = saying("A quien madruga, Dios le ayuda.");
         let mut options = screen(&entry, 80, 24);
@@ -498,6 +512,7 @@ mod tests {
         assert_fits(&frame, 40);
         assert!(!frame.contains("://"), "{frame}");
         assert!(frame.contains("o abrir"), "{frame}");
+        assert!(frame.contains("u · ?"), "{frame}");
     }
 
     #[test]
@@ -581,7 +596,7 @@ mod tests {
             assert_exact_height(&frame, 12);
             assert_fits(&frame, width);
             assert!(
-                frame.contains("n·o·l/h·?·q") || frame.contains("n next"),
+                frame.contains("n·o·u·l/h·?·q") || frame.contains("n next"),
                 "{frame}"
             );
         }

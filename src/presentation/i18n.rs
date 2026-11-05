@@ -43,6 +43,8 @@ pub enum Message {
     HelpCategoryShort,
     /// Compact help, open the source.
     HelpOpenShort,
+    /// Compact help, update the catalog.
+    HelpUpdateShort,
     /// Compact help, close the help.
     HelpCloseShort,
     /// Compact help, quit.
@@ -57,6 +59,8 @@ pub enum Message {
     HelpCategoryLong,
     /// Long help, open the source.
     HelpOpenLong,
+    /// Long help, update the catalog.
+    HelpUpdateLong,
     /// Long help, close the help.
     HelpCloseLong,
     /// Long help, quit.
@@ -71,6 +75,8 @@ pub enum Message {
     FooterCategory,
     /// Footer, help.
     FooterHelp,
+    /// Footer, update the catalog.
+    FooterUpdate,
     /// Footer, quit.
     FooterQuit,
     /// Label of the source hyperlink.
@@ -93,6 +99,18 @@ pub enum Message {
     ProgressUpdating,
     /// Notice shown when the background refresh updated the catalog.
     CatalogUpdated,
+    /// Notice shown when a manual update starts.
+    UpdateStarted,
+    /// Notice shown when another worker already owns the update.
+    UpdateAlreadyRunning,
+    /// Notice shown when the reader runs in offline mode.
+    UpdateOffline,
+    /// Notice shown when the reader has no update support configured.
+    UpdateUnavailable,
+    /// Notice shown when the update worker cannot start.
+    UpdateFailed,
+    /// Notice shown when the update worker finishes with an error.
+    UpdateFailedRun,
     /// Notice shown when the source opens in the browser.
     SourceOpened,
     /// Notice shown when the entry exists in a single language.
@@ -118,6 +136,7 @@ const ALL_MESSAGES: &[Message] = &[
     Message::HelpPreviousShort,
     Message::HelpCategoryShort,
     Message::HelpOpenShort,
+    Message::HelpUpdateShort,
     Message::HelpCloseShort,
     Message::HelpQuitShort,
     Message::HelpNextLong,
@@ -125,6 +144,7 @@ const ALL_MESSAGES: &[Message] = &[
     Message::HelpPreviousLanguageLong,
     Message::HelpCategoryLong,
     Message::HelpOpenLong,
+    Message::HelpUpdateLong,
     Message::HelpCloseLong,
     Message::HelpQuitLong,
     Message::FooterNext,
@@ -132,6 +152,7 @@ const ALL_MESSAGES: &[Message] = &[
     Message::FooterLanguage,
     Message::FooterCategory,
     Message::FooterHelp,
+    Message::FooterUpdate,
     Message::FooterQuit,
     Message::LinkLabel,
     Message::LanguageStripShort,
@@ -143,6 +164,12 @@ const ALL_MESSAGES: &[Message] = &[
     Message::NoOtherCategories,
     Message::ProgressUpdating,
     Message::CatalogUpdated,
+    Message::UpdateStarted,
+    Message::UpdateAlreadyRunning,
+    Message::UpdateOffline,
+    Message::UpdateUnavailable,
+    Message::UpdateFailed,
+    Message::UpdateFailedRun,
     Message::SourceOpened,
     Message::OnlyInLanguage,
     Message::CurrentLanguage,
@@ -186,6 +213,10 @@ impl Catalog {
             (UiLanguage::English, Message::CurrentCategory) => "Category: ",
             (UiLanguage::Spanish, Message::SourceOpenFailed) => "No se pudo abrir la fuente: ",
             (UiLanguage::English, Message::SourceOpenFailed) => "Could not open the source: ",
+            (UiLanguage::Spanish, Message::UpdateFailed) => "No se pudo iniciar la actualización: ",
+            (UiLanguage::English, Message::UpdateFailed) => "Could not start the update: ",
+            (UiLanguage::Spanish, Message::UpdateFailedRun) => "La actualización falló: ",
+            (UiLanguage::English, Message::UpdateFailedRun) => "The update failed: ",
             _ => return self.text(message).to_owned(),
         };
         format!("{prefix}{value}")
@@ -225,6 +256,7 @@ const fn spanish(message: Message) -> &'static str {
         Message::HelpPreviousShort => "anterior",
         Message::HelpCategoryShort => "categoría",
         Message::HelpOpenShort => "abrir",
+        Message::HelpUpdateShort => "actualizar",
         Message::HelpCloseShort => "cerrar",
         Message::HelpQuitShort => "salir",
         Message::HelpNextLong => "Otro refrán",
@@ -232,6 +264,7 @@ const fn spanish(message: Message) -> &'static str {
         Message::HelpPreviousLanguageLong => "Idioma o variante anterior",
         Message::HelpCategoryLong => "Siguiente categoría",
         Message::HelpOpenLong => "Abrir la fuente",
+        Message::HelpUpdateLong => "Actualizar el catálogo ahora",
         Message::HelpCloseLong => "Cerrar esta ayuda",
         Message::HelpQuitLong => "Salir",
         Message::FooterNext => "n otro",
@@ -239,6 +272,7 @@ const fn spanish(message: Message) -> &'static str {
         Message::FooterLanguage => "l/h idioma",
         Message::FooterCategory => "c categoría",
         Message::FooterHelp => "? ayuda",
+        Message::FooterUpdate => "u actualizar",
         Message::FooterQuit => "q salir",
         Message::LinkLabel => "Consultar fuente",
         Message::LanguageStripShort => "Idiomas",
@@ -250,6 +284,12 @@ const fn spanish(message: Message) -> &'static str {
         Message::NoOtherCategories => "Sin entradas en otras categorías para este idioma",
         Message::ProgressUpdating => "Actualizando",
         Message::CatalogUpdated => "Catálogo actualizado",
+        Message::UpdateStarted => "Actualización iniciada en segundo plano",
+        Message::UpdateAlreadyRunning => "Ya hay una actualización en curso",
+        Message::UpdateOffline => "Modo sin conexión: actualización desactivada",
+        Message::UpdateUnavailable => "Actualización no disponible",
+        Message::UpdateFailed => "No se pudo iniciar la actualización: {value}",
+        Message::UpdateFailedRun => "La actualización falló: {value}",
         Message::SourceOpened => "Fuente abierta en el navegador",
         Message::OnlyInLanguage => "Este refrán solo está en {value}",
         Message::CurrentLanguage => "Idioma: {value}",
@@ -271,6 +311,7 @@ const fn english(message: Message) -> &'static str {
         Message::HelpPreviousShort => "previous",
         Message::HelpCategoryShort => "category",
         Message::HelpOpenShort => "open",
+        Message::HelpUpdateShort => "update",
         Message::HelpCloseShort => "close",
         Message::HelpQuitShort => "quit",
         Message::HelpNextLong => "Another saying",
@@ -278,6 +319,7 @@ const fn english(message: Message) -> &'static str {
         Message::HelpPreviousLanguageLong => "Previous language or variant",
         Message::HelpCategoryLong => "Next category",
         Message::HelpOpenLong => "Open the source",
+        Message::HelpUpdateLong => "Update the catalog now",
         Message::HelpCloseLong => "Close this help",
         Message::HelpQuitLong => "Quit",
         Message::FooterNext => "n next",
@@ -285,6 +327,7 @@ const fn english(message: Message) -> &'static str {
         Message::FooterLanguage => "l/h language",
         Message::FooterCategory => "c category",
         Message::FooterHelp => "? help",
+        Message::FooterUpdate => "u update",
         Message::FooterQuit => "q quit",
         Message::LinkLabel => "View source",
         Message::LanguageStripShort => "Languages",
@@ -296,6 +339,12 @@ const fn english(message: Message) -> &'static str {
         Message::NoOtherCategories => "No entries in other categories for this language",
         Message::ProgressUpdating => "Updating",
         Message::CatalogUpdated => "Catalog updated",
+        Message::UpdateStarted => "Update started in the background",
+        Message::UpdateAlreadyRunning => "An update is already running",
+        Message::UpdateOffline => "Offline mode: update disabled",
+        Message::UpdateUnavailable => "Update is not available",
+        Message::UpdateFailed => "Could not start the update: {value}",
+        Message::UpdateFailedRun => "The update failed: {value}",
         Message::SourceOpened => "Source opened in the browser",
         Message::OnlyInLanguage => "This saying is only available in {value}",
         Message::CurrentLanguage => "Language: {value}",

@@ -5,14 +5,15 @@ mod presentation;
 mod refresh;
 mod session;
 mod store;
+mod update;
 
-use anyhow::{anyhow, bail, Context, Result};
+use anyhow::{bail, Context, Result};
 use clap::{Parser, Subcommand};
 use domain::Category;
 use std::io::IsTerminal;
 #[cfg(windows)]
 use std::os::windows::process::CommandExt;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use store::Store;
 
 #[derive(Debug, Parser)]
@@ -77,6 +78,9 @@ enum Command {
         /// Also refresh the Wayback source when it is due.
         #[arg(long)]
         wayback: bool,
+        /// Refresh every allowed source even when its cache is fresh (manual update).
+        #[arg(long)]
+        force: bool,
     },
     /// Explicitly import source pages to the local SQLite catalog.
     Sync {
@@ -120,8 +124,13 @@ fn main() -> Result<()> {
             .join("refranero")
             .join("catalog.sqlite3"),
     };
-    if let Some(Command::RefreshWorker { owner, wayback }) = cli.command.as_ref() {
-        return run_refresh_worker(&db, owner, *wayback);
+    if let Some(Command::RefreshWorker {
+        owner,
+        wayback,
+        force,
+    }) = cli.command.as_ref()
+    {
+        return run_refresh_worker(&db, owner, *wayback, *force);
     }
     let mut store = Store::open(&db)?;
 
@@ -130,13 +139,16 @@ fn main() -> Result<()> {
             if interactive_reader(&cli) {
                 // Launch the worker before entering the alternate screen so warnings stay visible
                 // and the catalog keeps updating while the reader is open.
-                schedule_background_refresh(&cli, &db, &mut store, true);
+                schedule_background_refresh(&cli, &db, &store, true);
                 session::Session::start(&store, &cli.lang, cli.category, cli.color, ui_language)
+                    .map(|session| {
+                        session.with_updates(db.clone(), cli.offline, Box::new(spawn_manual_update))
+                    })
                     .and_then(|mut session| session.run())
             } else {
                 let result = random(&cli, &store, ui_language);
                 if result.is_ok() {
-                    schedule_background_refresh(&cli, &db, &mut store, false);
+                    schedule_background_refresh(&cli, &db, &store, false);
                 }
                 result
             }
@@ -201,12 +213,7 @@ fn main() -> Result<()> {
     }
 }
 
-fn schedule_background_refresh(
-    cli: &Cli,
-    db: &std::path::Path,
-    store: &mut Store,
-    allow_wayback: bool,
-) {
+fn schedule_background_refresh(cli: &Cli, db: &Path, store: &Store, allow_wayback: bool) {
     if cli.offline {
         return;
     }
@@ -253,7 +260,16 @@ fn worker_owner() -> String {
     format!("{}-{}", std::process::id(), unix_timestamp())
 }
 
-fn spawn_refresh_worker(db: &std::path::Path, owner: &str, wayback: bool) -> Result<()> {
+fn spawn_refresh_worker(db: &Path, owner: &str, wayback: bool) -> Result<()> {
+    spawn_refresh_worker_with(db, owner, wayback, false)
+}
+
+/// Spawn the forced worker used by the interactive `u` action.
+fn spawn_manual_update(db: &Path, owner: &str) -> Result<()> {
+    spawn_refresh_worker_with(db, owner, true, true)
+}
+
+fn spawn_refresh_worker_with(db: &Path, owner: &str, wayback: bool, force: bool) -> Result<()> {
     let executable = std::env::current_exe().context("locating current executable")?;
     let log_path = db.with_extension("refresh.log");
     let log = std::fs::OpenOptions::new()
@@ -271,6 +287,9 @@ fn spawn_refresh_worker(db: &std::path::Path, owner: &str, wayback: bool) -> Res
     if wayback {
         command.arg("--wayback");
     }
+    if force {
+        command.arg("--force");
+    }
     command
         .stdin(std::process::Stdio::null())
         .stdout(std::process::Stdio::from(log))
@@ -281,58 +300,24 @@ fn spawn_refresh_worker(db: &std::path::Path, owner: &str, wayback: bool) -> Res
     Ok(())
 }
 
-fn run_refresh_worker(db: &std::path::Path, owner: &str, allow_wayback: bool) -> Result<()> {
+fn run_refresh_worker(db: &Path, owner: &str, allow_wayback: bool, force: bool) -> Result<()> {
     let mut store = Store::open(db)?;
     let now = unix_timestamp();
-    let virtual_due = refresh::refresh_decision(store.last_successful_refresh()?, now, false)
-        == refresh::RefreshDecision::Stale;
-    let wayback_due = allow_wayback
-        && match store.last_wayback_refresh() {
-            Ok(value) => {
-                refresh::wayback_refresh_decision(value, now, false)
-                    == refresh::RefreshDecision::Stale
-            }
+    let last_virtual = store.last_successful_refresh()?;
+    let last_wayback = if allow_wayback {
+        match store.last_wayback_refresh() {
+            Ok(value) => value,
             Err(error) => {
                 eprintln!("Warning: could not check Wayback age: {error:#}");
-                false
-            }
-        };
-    if !virtual_due && !wayback_due {
-        return store.release_refresh_lease(owner);
-    }
-
-    // A Virtual failure must not cancel due Wayback work, and a lost lease must.
-    let mut first_error: Option<anyhow::Error> = None;
-    if virtual_due {
-        if let Err(error) = refresh_virtual(&mut store, owner) {
-            first_error = Some(error);
-        }
-    }
-    if wayback_due {
-        match store.renew_refresh_lease(unix_timestamp(), owner) {
-            Ok(true) => {
-                if let Err(error) = refresh_wayback(&mut store, owner) {
-                    first_error.get_or_insert(error);
-                }
-            }
-            Ok(false) => {
-                first_error
-                    .get_or_insert_with(|| anyhow!("refresh lease lost before the Wayback run"));
-            }
-            Err(error) => {
-                first_error.get_or_insert(error);
+                // A read failure must not turn an automatic run into a due crawl.
+                Some(now)
             }
         }
-    }
-
-    let cleared = store.clear_refresh_progress(owner);
-    let released = store.release_refresh_lease(owner);
-    if let Some(error) = first_error {
-        return Err(error);
-    }
-    cleared?;
-    released?;
-    Ok(())
+    } else {
+        None
+    };
+    let scope = update::update_scope(last_virtual, last_wayback, now, allow_wayback, force);
+    update::run_worker(&mut store, owner, scope, refresh_virtual, refresh_wayback)
 }
 
 fn publish_progress(store: &Store, phase: &str, done: usize, total: usize) {

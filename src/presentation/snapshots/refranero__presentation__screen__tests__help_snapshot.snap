@@ -6,7 +6,6 @@ expression: compose(&options)
 
 
 
-
   ATAJOS
   ────────────────────────────────────────
 
@@ -15,10 +14,11 @@ expression: compose(&options)
   h / ←                 Idioma o variante anterior
   c                     Siguiente categoría
   o                     Abrir la fuente
+  u                     Actualizar el catálogo ahora
   ?                     Cerrar esta ayuda
   q / Esc               Salir
 
 
 
 
-  n otro · o abrir · l/h idioma · c categoría · ? ayuda · q salir
+  n otro · o abrir · l/h idioma · c categoría · ? ayuda · u actualizar · q salir

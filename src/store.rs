@@ -10,6 +10,7 @@ use std::path::Path;
 const SOURCE_LINK_MIGRATION_KEY: &str = "source_link_migration_version";
 const SOURCE_LINK_MIGRATION_VERSION: &str = "1";
 const REFRESH_PROGRESS_KEY: &str = "refresh_progress";
+const REFRESH_ERROR_KEY: &str = "last_refresh_error";
 const WAYBACK_REFRESH_KEY: &str = "last_wayback_refresh";
 const WAYBACK_CURSOR_KEY: &str = "wayback_cursor";
 
@@ -19,6 +20,13 @@ pub struct RefreshProgress {
     pub phase: String,
     pub done: usize,
     pub total: usize,
+    pub updated_at: i64,
+}
+
+/// Last failed update, published by the worker for the reader.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct RefreshError {
+    pub message: String,
     pub updated_at: i64,
 }
 
@@ -146,8 +154,13 @@ impl Store {
     }
 
     /// Acquire the background refresh lease if no active worker owns it.
-    pub fn try_acquire_refresh_lease(&mut self, now: i64, owner: &str) -> Result<bool> {
-        let transaction = self.connection.transaction()?;
+    ///
+    /// The caller only needs shared access: the session may hold the lease while the reader
+    /// keeps using the catalog.
+    pub fn try_acquire_refresh_lease(&self, now: i64, owner: &str) -> Result<bool> {
+        // No other transaction runs on this connection at this point, so the unchecked
+        // transaction is safe and does not require `&mut self`.
+        let transaction = self.connection.unchecked_transaction()?;
         transaction.execute(
             "INSERT INTO metadata(key, value) VALUES ('refresh_lease_until', ?1)
              ON CONFLICT(key) DO UPDATE SET value = excluded.value
@@ -248,6 +261,30 @@ impl Store {
             return Ok(None);
         };
         Ok(serde_json::from_str(&value).ok())
+    }
+
+    /// Publish the last update failure for the interactive reader.
+    pub fn record_refresh_error(&self, message: &str, updated_at: i64) -> Result<()> {
+        let value = serde_json::to_string(&RefreshError {
+            message: message.to_owned(),
+            updated_at,
+        })?;
+        self.set_metadata(REFRESH_ERROR_KEY, &value)
+    }
+
+    /// Read the last update failure. Corrupt or missing values read as `None`.
+    pub fn refresh_error(&self) -> Result<Option<RefreshError>> {
+        let Some(value) = self.metadata(REFRESH_ERROR_KEY)? else {
+            return Ok(None);
+        };
+        Ok(serde_json::from_str(&value).ok())
+    }
+
+    /// Remove the last update failure after a successful run.
+    pub fn clear_refresh_error(&self) -> Result<()> {
+        self.connection
+            .execute("DELETE FROM metadata WHERE key = ?1", [REFRESH_ERROR_KEY])?;
+        Ok(())
     }
 
     /// Remove published progress, but only while `owner` still holds the refresh lease.
@@ -970,7 +1007,7 @@ mod tests {
 
     #[test]
     fn publishes_and_clears_refresh_progress_only_for_the_lease_owner() {
-        let mut store = Store::open(Path::new(":memory:")).unwrap();
+        let store = Store::open(Path::new(":memory:")).unwrap();
         assert!(store.refresh_progress().unwrap().is_none());
         assert!(store.try_acquire_refresh_lease(1_000, "worker-a").unwrap());
 
@@ -999,6 +1036,29 @@ mod tests {
         let store = Store::open(Path::new(":memory:")).unwrap();
         store.set_metadata("refresh_progress", "not json").unwrap();
         assert!(store.refresh_progress().unwrap().is_none());
+    }
+
+    #[test]
+    fn records_and_clears_the_last_refresh_error() {
+        let store = Store::open(Path::new(":memory:")).unwrap();
+        assert!(store.refresh_error().unwrap().is_none());
+
+        store.record_refresh_error("network down", 42).unwrap();
+        assert_eq!(
+            store.refresh_error().unwrap(),
+            Some(RefreshError {
+                message: "network down".into(),
+                updated_at: 42,
+            })
+        );
+
+        store.clear_refresh_error().unwrap();
+        assert!(store.refresh_error().unwrap().is_none());
+
+        store
+            .set_metadata("last_refresh_error", "not json")
+            .unwrap();
+        assert!(store.refresh_error().unwrap().is_none());
     }
 
     #[test]
