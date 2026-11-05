@@ -233,7 +233,10 @@ fn stats_section(
         let counter = format!("{count:>count_width$}");
         let mut line = format!("  {label} {counter}");
         if bar_width > 0 {
-            let filled = (bar_width * count).checked_div(reference).unwrap_or(0);
+            let filled = (bar_width * count)
+                .checked_div(reference)
+                .unwrap_or(0)
+                .min(bar_width);
             let bar = format!(
                 "{}{}",
                 theme.progress(&"█".repeat(filled)),
@@ -242,7 +245,7 @@ fn stats_section(
             line.push_str(&format!("  {bar}"));
         }
         if show_percent {
-            let percent = (count * 100).checked_div(reference).unwrap_or(0);
+            let percent = (count * 100).checked_div(reference).unwrap_or(0).min(100);
             line.push_str(&format!("  {percent:>3}%"));
         }
         lines.push(theme.meta(&line));
