@@ -119,7 +119,10 @@ catalog refresh.
 
 When `stdin` and `stdout` are terminals, `refranero` opens a full-screen reader.
 The automatic refresh check runs before the reader opens, and its worker keeps
-updating the catalog in the background while you read. The reader announces
+updating the catalog in the background while you read. On the first interactive
+refresh, the worker imports all five Cervantes Virtual category pages and
+processes the full A–Z Wayback index. This initial import can take longer than
+later updates. The reader announces
 `Catálogo actualizado` when the new data lands; the entry on screen is not
 replaced under you. Use `--offline` to skip the refresh entirely. The request
 path is drawn in the
@@ -129,8 +132,15 @@ While the worker runs, the reader draws a status bar above the key map with the
 phase, a block bar, the percentage and the completed units:
 
 ```text
-  Actualizando Wayback A ███████████░░░░░░░░░░░░░░░░░  40%  4/10
+  Actualizando Wayback bootstrap 1/26 (A) ██░░░░░░░░░░  20%  8/40
 ```
+
+En Wayback, el porcentaje y el contador corresponden a las fichas raíz terminadas
+de la letra actual, no a las letras completadas. La fase identifica la letra y
+su posición en A–Z, también al reanudar. Durante el índice, la fase muestra
+`índice`; durante las solicitudes y las esperas muestra el intento o
+`espera/reintento` con los segundos pendientes. Estos textos siguen el idioma
+de la interfaz (`--ui-lang es` o `--ui-lang en`).
 
 Press `u` to request an update at any time, even when the catalog is still
 fresh. The reader acquires the refresh lease and starts a forced worker as a
@@ -292,9 +302,9 @@ refranero --db ./catalog.sqlite3 stats
 
 ## Import and refresh data
 
-The random command reads local data first. When the interactive reader opens, or
-when the catalog is stale, Refranero schedules a background refresh and does not
-wait for it. Use `--offline` to skip it and use only the local catalog.
+The random command reads local data first. When the catalog is stale, Refranero
+schedules a background refresh and does not wait for it. Use `--offline` to skip
+it and use only the local catalog.
 
 Inside the interactive reader, `u` starts a forced update even when both caches
 are fresh. The forced worker reuses the same lease, progress channel and
@@ -304,15 +314,47 @@ the interface or competes with a running worker.
 The automatic refresh covers two sources on separate cycles:
 
 - **Cervantes Virtual** (24 hours): replaces the current-portal snapshot.
-- **Wayback** (7 days, interactive reader only): imports one archived letter per
-  run, advancing A→Z and wrapping around, with a bounded number of root fichas.
-  It uses the current year to pick the nearest capture. The job is not scheduled
-  for redirected output, so a script never starts a long crawl.
+- **Wayback**: la primera actualización interactiva en segundo plano (o una
+  actualización forzada) importa las raíces y sus variantes disponibles de A–Z.
+  Guarda cada raíz del índice antes de solicitar su captura; después actualiza
+  su procedencia y guarda cada variante disponible. Un fallo posterior no borra
+  lo guardado. El cursor solo avanza cuando termina la letra sin errores de
+  solicitud; la reanudación repite la letra pendiente sin duplicar registros.
+  Tras la carga inicial, conserva el ciclo de siete días y una letra por
+  ejecución, con el límite de raíces existente. Usa el año actual para elegir
+  la captura más cercana.
 
-On a fresh catalog the Wayback run is due immediately, so the first interactive
-launch may start it. A failed run keeps its letter and retries on the next
-interactive launch; closing the reader does not stop a worker that is already
-running.
+Si no se extraen raíces del índice, solo se acepta como vacío cuando el título
+identifica el Refranero y el contenido incluye un marcador explícito de ausencia
+de resultados, como `No hay paremias`. La navegación de la letra, aunque sea
+correcta, no demuestra que el índice esté vacío. Ante contenido desconocido o
+una página de error, la letra queda pendiente; no se avanza el cursor.
+Esta validación se comprueba con fixtures, no con nuevas capturas remotas.
+
+Las solicitudes Wayback son secuenciales y comparten un cliente y un control de
+espera durante todo el recorrido. Entre solicitudes hay una pausa mínima de
+1,2 segundos. HTTP 429, 408, 5xx y errores de conexión o timeout pueden provocar
+hasta tres intentos por solicitud. `Retry-After` admite segundos o una fecha
+HTTP; sin un valor válido, las esperas de reintento son de 2 y 4 segundos.
+El presupuesto acumulado de espera es de 120 segundos por solicitud. Si una
+espera lo supera, la letra se interrumpe con un error explícito: no se recorta
+`Retry-After` ni se continúa con las demás fichas. Las redirecciones también
+pasan por este control, con un máximo de cinco saltos y destinos HTTPS de
+Archive.org. Cada solicitud tiene un timeout de 5 segundos en el worker
+(20 segundos en `sync`).
+
+Durante las esperas, el worker renueva el lease y publica actividad al menos una
+vez por segundo. Si falla una escritura o pierde el lease, no envía la siguiente
+solicitud. Los errores de lectura o validación del cuerpo también interrumpen
+la letra; no se reintenta automáticamente la descarga del cuerpo. Los avisos de
+parseo de variantes no impiden guardar las demás variantes válidas.
+
+The first update can take longer because it processes all 26 letters. Closing
+the reader does not stop a worker that is already running. Harvested records are
+stored only in the local SQLite catalog; Refranero does not add them to the seed
+data or distribute them in npm packages or releases.
+Non-interactive one-shot output can refresh Cervantes Virtual but does not start
+the Wayback bootstrap.
 
 Refresh output is appended to a `catalog.refresh.log` file next to the SQLite
 database. While the reader is open, the worker publishes its progress and the
@@ -328,7 +370,8 @@ page. The category URL used during import is retained in `original_url`.
 When upgrading an existing catalog, Refranero migrates links in the bundled
 starter records and marks the current-portal snapshot as stale. Run
 `refranero sync virtual --limit 50` once to replace that snapshot immediately
-using the same per-page limit as automatic refresh. This replaces prior
+using the explicitly requested per-page limit. Automatic refresh does not apply
+that limit. This replaces prior
 `cervantes_virtual` entries but leaves CVC/Wayback records untouched. Otherwise,
 the next online random read schedules the refresh in the background.
 

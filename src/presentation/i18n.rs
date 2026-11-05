@@ -261,6 +261,24 @@ impl Catalog {
     pub fn language_name(&self, code: &str) -> String {
         label::language(self.language, code)
     }
+
+    /// Fase publicada por el worker, en el idioma de la interfaz lectora.
+    pub fn progress_phase(&self, phase: &str) -> String {
+        if !phase.starts_with("Wayback ") || self.language == UiLanguage::English {
+            return phase.to_owned();
+        }
+        phase
+            .split_whitespace()
+            .map(|word| match word {
+                "index" => "índice",
+                "root" => "ficha",
+                "request" => "solicitud",
+                "waiting/retry" => "espera/reintento",
+                _ => word,
+            })
+            .collect::<Vec<_>>()
+            .join(" ")
+    }
 }
 
 /// Spanish text of every message.
@@ -450,6 +468,18 @@ where
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn wayback_activity_uses_reader_language() {
+        let phase = "Wayback bootstrap 1/26 (A) index waiting/retry 7s";
+        assert_eq!(
+            super::Catalog::new(super::UiLanguage::Spanish).progress_phase(phase),
+            "Wayback bootstrap 1/26 (A) índice espera/reintento 7s"
+        );
+        assert_eq!(
+            super::Catalog::new(super::UiLanguage::English).progress_phase(phase),
+            phase
+        );
+    }
     use std::ffi::OsString;
 
     use super::{parse_locale, resolve_ui_language, Catalog, Message, UiLanguage, ALL_MESSAGES};

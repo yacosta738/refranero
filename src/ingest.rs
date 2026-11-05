@@ -36,12 +36,27 @@ fn install_crypto_provider() {
 
 /// Create a bounded HTTP client with a caller-selected request timeout.
 pub fn http_client_with_timeout(timeout: Duration) -> Result<Client> {
+    build_http_client(timeout, false)
+}
+
+/// Las redirecciones Wayback pasan por el mismo control de pausas y reintentos.
+pub fn wayback_client_with_timeout(timeout: Duration) -> Result<Client> {
+    build_http_client(timeout, true)
+}
+
+fn build_http_client(timeout: Duration, controlled: bool) -> Result<Client> {
     install_crypto_provider();
-    Ok(Client::builder()
+    let builder = Client::builder()
         .user_agent("refranero-cli/0.1 (personal opt-in import; contact: local user)")
-        .timeout(timeout)
-        .redirect(reqwest::redirect::Policy::limited(5))
-        .build()?)
+        .timeout(timeout);
+    let builder = if controlled {
+        builder
+            .redirect(reqwest::redirect::Policy::none())
+            .retry(reqwest::retry::never())
+    } else {
+        builder.redirect(reqwest::redirect::Policy::limited(5))
+    };
+    Ok(builder.build()?)
 }
 
 /// Download a text/html page with an upper body-size limit.
@@ -50,10 +65,86 @@ fn fetch_html(client: &Client, url: &str) -> Result<String> {
     read_html_response(response)
 }
 
-fn fetch_wayback_html(client: &Client, replay_url: &str) -> Result<String> {
-    let response = client.get(replay_url).send()?.error_for_status()?;
+trait WaybackTransport {
+    fn get(
+        &mut self,
+        url: &str,
+        activity: &mut dyn FnMut(&str) -> Result<()>,
+    ) -> Result<reqwest::blocking::Response>;
+}
+
+struct WaybackHttp<'a> {
+    client: &'a Client,
+    requests: &'a mut crate::wayback_request::WaybackRequests,
+}
+
+impl WaybackTransport for WaybackHttp<'_> {
+    fn get(
+        &mut self,
+        url: &str,
+        activity: &mut dyn FnMut(&str) -> Result<()>,
+    ) -> Result<reqwest::blocking::Response> {
+        self.requests.get(self.client, url, activity)
+    }
+}
+
+fn fetch_wayback_html(
+    transport: &mut impl WaybackTransport,
+    replay_url: &str,
+    activity: &mut impl FnMut(&str) -> Result<()>,
+) -> Result<String> {
+    let response = transport.get(replay_url, activity)?;
     validate_wayback_final_url(response.url())?;
-    read_html_response(response)
+    read_html_response(response).map_err(mark_wayback_body_error)
+}
+
+#[derive(Debug)]
+struct RetryableWaybackRequest;
+
+impl std::fmt::Display for RetryableWaybackRequest {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        formatter.write_str("transient Wayback request failure")
+    }
+}
+
+impl std::error::Error for RetryableWaybackRequest {}
+
+#[cfg(test)]
+fn retryable_request_error(message: &str) -> anyhow::Error {
+    anyhow!(RetryableWaybackRequest).context(message.to_owned())
+}
+
+fn is_retryable_wayback_failure(error: &anyhow::Error) -> bool {
+    error
+        .chain()
+        .any(|cause| cause.is::<RetryableWaybackRequest>())
+}
+
+fn classify_wayback_request_error(error: reqwest::Error) -> anyhow::Error {
+    let retryable = error.is_timeout()
+        || error.is_connect()
+        || error.is_decode()
+        || error.status().is_some_and(is_retryable_wayback_status);
+    let error = anyhow!(error);
+    if retryable {
+        error.context(RetryableWaybackRequest)
+    } else {
+        error
+    }
+}
+
+fn is_retryable_wayback_status(status: reqwest::StatusCode) -> bool {
+    status == reqwest::StatusCode::REQUEST_TIMEOUT
+        || status.is_server_error()
+        || status == reqwest::StatusCode::TOO_MANY_REQUESTS
+}
+
+fn mark_wayback_body_error(error: anyhow::Error) -> anyhow::Error {
+    if error.chain().any(|cause| cause.is::<std::io::Error>()) {
+        error.context(RetryableWaybackRequest)
+    } else {
+        error
+    }
 }
 
 fn read_html_response(response: reqwest::blocking::Response) -> Result<String> {
@@ -205,30 +296,32 @@ fn validate_wayback_final_url(final_url: &Url) -> Result<()> {
 }
 
 fn find_wayback_capture(
-    client: &Client,
+    transport: &mut impl WaybackTransport,
     original_url: &Url,
     year: u16,
+    activity: &mut impl FnMut(&str) -> Result<()>,
 ) -> Result<Option<WaybackReplay>> {
     let timestamp = year.to_string();
-    let response: AvailabilityResponse = client
-        .get("https://archive.org/wayback/available")
-        .query(&[("url", original_url.as_str()), ("timestamp", &timestamp)])
-        .send()?
-        .error_for_status()?
-        .json()?;
+    let mut url = Url::parse("https://archive.org/wayback/available")?;
+    url.query_pairs_mut()
+        .append_pair("url", original_url.as_str())
+        .append_pair("timestamp", &timestamp);
+    let response = transport.get(url.as_str(), activity)?;
+    let response: AvailabilityResponse = response.json().map_err(classify_wayback_request_error)?;
     validate_wayback_snapshot(response.archived_snapshots.closest)
 }
 
 fn fetch_wayback_ficha(
-    client: &Client,
+    transport: &mut impl WaybackTransport,
     original_url: &Url,
     year: u16,
+    activity: &mut impl FnMut(&str) -> Result<()>,
 ) -> Result<Option<CapturedFicha>> {
-    let Some(capture) = find_wayback_capture(client, original_url, year)? else {
+    let Some(capture) = find_wayback_capture(transport, original_url, year, activity)? else {
         return Ok(None);
     };
     let replay_url = capture.replay_url;
-    let html = fetch_wayback_html(client, replay_url.as_str())
+    let html = fetch_wayback_html(transport, replay_url.as_str(), activity)
         .with_context(|| format!("retrieving {replay_url}"))?;
     Ok(Some(CapturedFicha {
         html,
@@ -240,25 +333,35 @@ fn fetch_wayback_ficha(
 /// Import Spanish index entries and available language variants from archived fichas.
 /// Each ficha uses its own nearest Wayback capture; the index capture does not guarantee
 /// that any linked ficha or language variant is archived.
-pub fn import_wayback(
+pub fn import_wayback_stream<P>(
     client: &Client,
+    requests: &mut crate::wayback_request::WaybackRequests,
     letter: char,
     year: u16,
     limit: usize,
-) -> Result<WaybackImportReport> {
-    import_wayback_with_progress(client, letter, year, limit, |_, _| {})
-}
-
-/// Same as [`import_wayback`], reporting `(done, total)` roots so a UI can draw progress.
-pub fn import_wayback_with_progress<P>(
-    client: &Client,
-    letter: char,
-    year: u16,
-    limit: usize,
-    mut on_progress: P,
+    events: P,
 ) -> Result<WaybackImportReport>
 where
-    P: FnMut(usize, usize),
+    P: FnMut(WaybackEvent<'_>) -> Result<()>,
+{
+    import_wayback_with_transport(
+        &mut WaybackHttp { client, requests },
+        letter,
+        year,
+        limit,
+        events,
+    )
+}
+
+fn import_wayback_with_transport<P>(
+    transport: &mut impl WaybackTransport,
+    letter: char,
+    year: u16,
+    limit: usize,
+    mut events: P,
+) -> Result<WaybackImportReport>
+where
+    P: FnMut(WaybackEvent<'_>) -> Result<()>,
 {
     if !letter.is_ascii_alphabetic() {
         bail!("--letter must be one ASCII alphabetic character");
@@ -270,17 +373,86 @@ where
         "{CVC_BASE}listado.aspx?letra={}",
         letter.to_ascii_uppercase()
     ))?;
-    let capture = find_wayback_capture(client, &index_url, year)?
+    let mut index_activity = |activity: &str| {
+        events(WaybackEvent::Progress {
+            done: 0,
+            total: 0,
+            activity: &format!("index {activity}"),
+        })
+    };
+    index_activity("index")?;
+    let capture = find_wayback_capture(transport, &index_url, year, &mut index_activity)?
         .ok_or_else(|| anyhow!("no available HTTP 200 Wayback capture for {index_url}"))?;
-    let html = fetch_html(client, capture.replay_url.as_str())
+    let html = fetch_wayback_html(transport, capture.replay_url.as_str(), &mut index_activity)
         .with_context(|| format!("retrieving {}", capture.replay_url))?;
     let roots = parse_wayback_index(&html, &capture.timestamp, limit);
-    Ok(collect_wayback_fichas(
+    validate_wayback_index_html(&html, !roots.is_empty())?;
+    let done = std::cell::Cell::new(0);
+    let total = roots.len();
+    stream_wayback_fichas(
         roots,
         year,
-        |original_url, target_year| fetch_wayback_ficha(client, original_url, target_year),
-        &mut on_progress,
-    ))
+        |original_url, target_year, events| {
+            fetch_wayback_ficha(transport, original_url, target_year, &mut |activity| {
+                events(WaybackEvent::Progress {
+                    done: done.get(),
+                    total,
+                    activity,
+                })
+            })
+        },
+        &mut |event| {
+            if let WaybackEvent::Progress { done: value, .. } = &event {
+                done.set(*value);
+            }
+            events(event)
+        },
+    )
+}
+
+fn validate_wayback_index_html(html: &str, has_roots: bool) -> Result<()> {
+    let document = Html::parse_document(html);
+    let title_selector = Selector::parse("title").expect("static CSS selector");
+    let title = document
+        .select(&title_selector)
+        .next()
+        .map(|element| normalize(&element.text().collect::<String>()).to_ascii_lowercase())
+        .unwrap_or_default();
+    let text = normalize(&document.root_element().text().collect::<String>()).to_ascii_lowercase();
+    let error_markers = [
+        "wayback machine error",
+        "temporarily unavailable",
+        "service unavailable",
+        "internal server error",
+        "too many requests",
+        "rate limit",
+        "page not found",
+        "404 not found",
+        "robot check",
+    ];
+    if error_markers
+        .iter()
+        .any(|marker| text.contains(marker) || title.contains(marker))
+    {
+        bail!("Wayback index replay returned a soft-error page");
+    }
+    if has_roots {
+        return Ok(());
+    }
+
+    let has_empty_marker = [
+        "no hay paremias",
+        "no existen paremias",
+        "no se encontraron paremias",
+        "sin resultados",
+        "no results",
+    ]
+    .iter()
+    .any(|marker| text.contains(marker));
+    if !title.contains("refranero") || !has_empty_marker {
+        bail!("Wayback index replay has no recognized listing or empty-index marker");
+    }
+    Ok(())
 }
 
 /// Extract Spanish paremia anchors from archived CVC listings, without fabricating translations.
@@ -384,6 +556,7 @@ struct VariantCollection {
     available: usize,
     unavailable: usize,
     warnings: Vec<WaybackImportWarning>,
+    retryable_failures: usize,
 }
 
 /// Result of one archived-index import run.
@@ -536,6 +709,7 @@ where
         available: 0,
         unavailable: 0,
         warnings: Vec::new(),
+        retryable_failures: 0,
     };
 
     for link in links {
@@ -567,111 +741,119 @@ where
                 });
             }
             Ok(None) => collection.unavailable += 1,
-            Err(error) => collection.warnings.push(WaybackImportWarning {
-                par: link.par.clone(),
-                language: Some(link.language.clone()),
-                reason: format!("retrieving archived ficha: {error:#}"),
-            }),
+            Err(error) => {
+                collection.retryable_failures += usize::from(is_retryable_wayback_failure(&error));
+                collection.warnings.push(WaybackImportWarning {
+                    par: link.par.clone(),
+                    language: Some(link.language.clone()),
+                    reason: format!("retrieving archived ficha: {error:#}"),
+                });
+            }
         }
     }
 
     collection
 }
 
-fn update_spanish_provenance(entry: &mut NewSaying, original_url: &Url, capture: &CapturedFicha) {
-    entry.source_url = capture.replay_url.to_string();
-    entry.original_url = Some(original_url.to_string());
-    entry.captured_at = Some(capture.timestamp.clone());
+pub enum WaybackEvent<'a> {
+    Progress {
+        done: usize,
+        total: usize,
+        activity: &'a str,
+    },
+    Entries(&'a [NewSaying], &'a HashSet<String>),
 }
 
-fn collect_wayback_fichas<F, P>(
+fn stream_wayback_fichas<F, P>(
     roots: Vec<NewSaying>,
     year: u16,
     mut fetch: F,
-    on_progress: &mut P,
-) -> WaybackImportReport
+    events: &mut P,
+) -> Result<WaybackImportReport>
 where
-    F: FnMut(&Url, u16) -> Result<Option<CapturedFicha>>,
-    P: FnMut(usize, usize),
+    P: FnMut(WaybackEvent<'_>) -> Result<()>,
+    F: FnMut(&Url, u16, &mut P) -> Result<Option<CapturedFicha>>,
 {
-    let roots_processed = roots.len();
+    let total = roots.len();
     let mut report = WaybackImportReport {
-        roots_processed,
-        entries: Vec::with_capacity(roots_processed),
+        roots_processed: 0,
+        entries: Vec::new(),
         variants_available: 0,
         variants_unavailable: 0,
         captured_spanish_pars: HashSet::new(),
         warnings: Vec::new(),
     };
-
-    for (index, mut entry) in roots.into_iter().enumerate() {
-        on_progress(index, roots_processed);
+    for (done, mut entry) in roots.into_iter().enumerate() {
+        events(WaybackEvent::Progress {
+            done,
+            total,
+            activity: "root",
+        })?;
+        let original = Url::parse(entry.original_url.as_deref().context("missing root URL")?)?;
         let par = entry
             .group_id
             .as_deref()
-            .and_then(|group_id| group_id.strip_prefix("cvc:"))
-            .map(str::to_string);
-        let original_url = entry
-            .original_url
-            .as_deref()
-            .and_then(|url| Url::parse(url).ok());
-        let (Some(par), Some(original_url)) = (par, original_url) else {
+            .and_then(|id| id.strip_prefix("cvc:"))
+            .context("missing root Par")?
+            .to_owned();
+        // El índice ya proporciona una raíz utilizable. Guardarla no completa el grupo.
+        events(WaybackEvent::Entries(
+            std::slice::from_ref(&entry),
+            &report.captured_spanish_pars,
+        ))?;
+        let capture = fetch(&original, year, events)?;
+        let links = if let Some(capture) = capture {
+            update_spanish_provenance(&mut entry, &original, &capture);
+            report.captured_spanish_pars.insert(par.clone());
+            report.variants_available += 1;
+            let discovery = parse_wayback_language_links(&capture.html, &par);
+            report.warnings.extend(discovery.warnings);
+            discovery.links
+        } else {
+            report.variants_unavailable += 1;
             report.warnings.push(WaybackImportWarning {
-                par: entry
-                    .group_id
-                    .as_deref()
-                    .and_then(|group_id| group_id.strip_prefix("cvc:"))
-                    .unwrap_or("unknown")
-                    .to_string(),
+                par,
                 language: Some("es".into()),
-                reason: "Spanish index entry has no valid CVC ficha URL or Par".into(),
+                reason: "Spanish ficha has no available Wayback capture; kept index entry".into(),
             });
-            report.entries.push(entry);
-            continue;
+            Vec::new()
         };
-
-        match fetch(&original_url, year) {
-            Ok(Some(capture)) => {
-                update_spanish_provenance(&mut entry, &original_url, &capture);
-                report.variants_available += 1;
-                report.captured_spanish_pars.insert(par.clone());
-
-                let discovery = parse_wayback_language_links(&capture.html, &par);
-                report.warnings.extend(discovery.warnings);
-                let variants = collect_wayback_variants(
-                    &discovery.links,
-                    |link| fetch(&link.original_url, year),
-                    &mut || on_progress(index, roots_processed),
-                );
-                report.variants_available += variants.available;
-                report.variants_unavailable += variants.unavailable;
-                report.warnings.extend(variants.warnings);
-                report.entries.push(entry);
-                report.entries.extend(variants.entries);
-            }
-            Ok(None) => {
-                report.variants_unavailable += 1;
-                report.warnings.push(WaybackImportWarning {
-                    par,
-                    language: Some("es".into()),
-                    reason: "Spanish ficha has no available Wayback capture; kept index entry"
-                        .into(),
-                });
-                report.entries.push(entry);
-            }
-            Err(error) => {
-                report.warnings.push(WaybackImportWarning {
-                    par,
-                    language: Some("es".into()),
-                    reason: format!("retrieving Spanish ficha: {error:#}"),
-                });
-                report.entries.push(entry);
-            }
+        // La raíz queda guardada incluso si falla la primera variante.
+        events(WaybackEvent::Entries(
+            std::slice::from_ref(&entry),
+            &report.captured_spanish_pars,
+        ))?;
+        report.entries.push(entry);
+        for link in links.iter().filter(|link| link.language != "es") {
+            let mut capture = fetch(&link.original_url, year, events)?;
+            let variants = collect_wayback_variants(
+                std::slice::from_ref(link),
+                |_| Ok(capture.take()),
+                &mut || {},
+            );
+            events(WaybackEvent::Entries(
+                &variants.entries,
+                &report.captured_spanish_pars,
+            ))?;
+            report.entries.extend(variants.entries);
+            report.variants_available += variants.available;
+            report.variants_unavailable += variants.unavailable;
+            report.warnings.extend(variants.warnings);
         }
+        report.roots_processed += 1;
+        events(WaybackEvent::Progress {
+            done: done + 1,
+            total,
+            activity: "",
+        })?;
     }
-    on_progress(roots_processed, roots_processed);
+    Ok(report)
+}
 
-    report
+fn update_spanish_provenance(entry: &mut NewSaying, original_url: &Url, capture: &CapturedFicha) {
+    entry.source_url = capture.replay_url.to_string();
+    entry.original_url = Some(original_url.to_string());
+    entry.captured_at = Some(capture.timestamp.clone());
 }
 
 /// Reconstruct the original CVC URL despite Wayback's rewritten anchor paths.
@@ -706,6 +888,337 @@ fn normalize(raw: &str) -> String {
 
 #[cfg(test)]
 mod tests {
+    use std::cell::Cell;
+    use std::collections::VecDeque;
+    use std::rc::Rc;
+
+    struct ImportClock(Rc<Cell<Duration>>);
+
+    impl crate::wayback_request::Clock for ImportClock {
+        fn now(&self) -> Duration {
+            self.0.get()
+        }
+        fn wait(&mut self, duration: Duration) {
+            self.0.set(self.0.get() + duration);
+        }
+    }
+
+    struct FakeWayback<F> {
+        requests: crate::wayback_request::WaybackRequests<ImportClock>,
+        responses: VecDeque<(u16, String, Option<&'static str>)>,
+        on_send: F,
+    }
+
+    impl<F: FnMut(&str)> WaybackTransport for FakeWayback<F> {
+        fn get(
+            &mut self,
+            url: &str,
+            activity: &mut dyn FnMut(&str) -> Result<()>,
+        ) -> Result<reqwest::blocking::Response> {
+            use reqwest::ResponseBuilderExt;
+            self.requests.get_with(
+                url,
+                |url| {
+                    (self.on_send)(url);
+                    let (status, body, retry_after) = self
+                        .responses
+                        .pop_front()
+                        .expect("solicitud HTTP no prevista");
+                    let mut response = http::Response::builder()
+                        .status(status)
+                        .url(Url::parse(url).unwrap());
+                    if let Some(value) = retry_after {
+                        response = response.header("retry-after", value);
+                    }
+                    Ok(response.body(body).unwrap().into())
+                },
+                activity,
+            )
+        }
+    }
+
+    fn available_capture(original: &str) -> String {
+        serde_json::json!({"archived_snapshots": {"closest": {
+            "available": true, "status": "200", "timestamp": "20240511091123",
+            "url": format!("https://web.archive.org/web/20240511091123/{original}")
+        }}})
+        .to_string()
+    }
+
+    #[test]
+    fn import_http_events_persist_progress_and_translation_before_rate_limit_abort() {
+        let mut store = crate::store::Store::open(std::path::Path::new(":memory:")).unwrap();
+        store
+            .try_acquire_refresh_lease(crate::unix_timestamp(), "test")
+            .unwrap();
+        let now = Rc::new(Cell::new(Duration::ZERO));
+        let mut labels = Vec::new();
+        let mut sent_at = Vec::new();
+        let mut letters = Vec::new();
+        let result = crate::update::run_wayback_updates(
+            &mut store,
+            |store, letter, _, _| {
+                letters.push(letter);
+                let phase = crate::wayback_phase(letter, true);
+                let mut transport = FakeWayback {
+                requests: crate::wayback_request::WaybackRequests::with_clock(ImportClock(now.clone())),
+                responses: VecDeque::from([
+                    (200, available_capture("https://cvc.cervantes.es/lengua/refranero/listado.aspx?letra=A"), None),
+                    (200, r#"<a href="Ficha.aspx?Par=1&Lng=0">Primera</a><a href="Ficha.aspx?Par=2&Lng=0">Segunda</a>"#.into(), None),
+                    (200, available_capture("https://cvc.cervantes.es/lengua/refranero/Ficha.aspx?Par=1&Lng=0"), None),
+                    (200, r#"<div id="idiomas"><a href="Ficha.aspx?Par=1&Lng=9"><acronym>EN</acronym></a></div>"#.into(), None),
+                    (200, available_capture("https://cvc.cervantes.es/lengua/refranero/Ficha.aspx?Par=1&Lng=9"), None),
+                    (200, r#"<div id="ficha"><div class="tabber"><div class="tabbertab"><h2>Paremia</h2><p><strong>Enunciado: </strong>First</p></div></div></div>"#.into(), None),
+                    (429, String::new(), Some("7")),
+                    (429, String::new(), Some("7")),
+                    (429, String::new(), Some("7")),
+                ]),
+                on_send: |url: &str| {
+                    sent_at.push(now.get());
+                    let parsed = Url::parse(url).unwrap();
+                    if parsed.query_pairs().any(|(key, value)| key == "url" && value.contains("Par=2")) {
+                        assert_eq!(store.count_source("cvc_wayback").unwrap(), 3, "raíz y variante previas ya persistidas");
+                        let progress = store.refresh_progress().unwrap().unwrap();
+                        assert_eq!((progress.done, progress.total), (1, 2));
+                    }
+                },
+            };
+                let result =
+                    import_wayback_with_transport(&mut transport, letter, 2024, 2, |event| {
+                        crate::handle_wayback_event(store, "test", &phase, event)?;
+                        if let Some(progress) = store.refresh_progress()? {
+                            labels.push(
+                                crate::presentation::Catalog::new(
+                                    crate::presentation::UiLanguage::Spanish,
+                                )
+                                .progress_phase(&progress.phase),
+                            );
+                        }
+                        Ok(())
+                    });
+                assert!(transport.responses.is_empty());
+                result.map(|report| report.entries.len())
+            },
+            |_, _, _, _| {},
+        );
+        assert!(result
+            .unwrap_err()
+            .to_string()
+            .contains("retries exhausted"));
+        assert_eq!(letters, vec!['A']);
+        assert_eq!(store.wayback_bootstrap_next().unwrap(), Some('A'));
+        assert_eq!(store.count_source("cvc_wayback").unwrap(), 3);
+        assert!(store
+            .random("en", Some("paremia"), 50)
+            .unwrap()
+            .iter()
+            .any(|saying| saying.entry.source == "cvc_wayback" && saying.entry.text == "First"));
+        assert_eq!(sent_at.len(), 9);
+        assert!(sent_at[7] - sent_at[6] >= Duration::from_secs(7));
+        assert!(sent_at[8] - sent_at[7] >= Duration::from_secs(7));
+        assert!(labels
+            .iter()
+            .any(|label| label.contains("índice solicitud")));
+        assert!(labels
+            .iter()
+            .any(|label| label.contains("espera/reintento 7s")));
+    }
+
+    #[test]
+    fn streaming_preserves_index_root_when_its_capture_request_fails() {
+        let store = crate::store::Store::open(std::path::Path::new(":memory:")).unwrap();
+        let roots = super::parse_wayback_index(
+            r#"<a href="Ficha.aspx?Par=1&Lng=0">Primera</a>"#,
+            "20240511091123",
+            1,
+        );
+        let mut completed = 0;
+        let result = super::stream_wayback_fichas(
+            roots,
+            2024,
+            |_, _, _| Err(super::retryable_request_error("429")),
+            &mut |event| {
+                match event {
+                    super::WaybackEvent::Entries(entries, pars) => {
+                        store.insert_wayback(entries, pars)?;
+                    }
+                    super::WaybackEvent::Progress { done, .. } => completed = done,
+                }
+                Ok(())
+            },
+        );
+        assert!(result.is_err());
+        assert_eq!(
+            store.count_source("cvc_wayback").unwrap(),
+            1,
+            "la raíz del índice ya estaba disponible"
+        );
+        assert_eq!(completed, 0, "el grupo no ha terminado");
+    }
+
+    #[test]
+    fn sqlite_write_failures_and_lost_lease_stop_streaming_requests() {
+        for failure in ["progress", "entries", "lease"] {
+            let path = std::env::temp_dir().join(format!(
+                "refranero-wayback-{failure}-{}-{}.sqlite3",
+                std::process::id(),
+                crate::unix_timestamp()
+            ));
+            let store = crate::store::Store::open(&path).unwrap();
+            store
+                .try_acquire_refresh_lease(crate::unix_timestamp(), "test")
+                .unwrap();
+            let connection = rusqlite::Connection::open(&path).unwrap();
+            match failure {
+                "progress" => connection.execute_batch("CREATE TRIGGER fail_progress BEFORE INSERT ON metadata WHEN NEW.key = 'refresh_progress' BEGIN SELECT RAISE(FAIL, 'progress write failed'); END;").unwrap(),
+                "entries" => connection.execute_batch("CREATE TRIGGER fail_entries BEFORE INSERT ON sayings BEGIN SELECT RAISE(FAIL, 'entry write failed'); END;").unwrap(),
+                _ => {},
+            }
+            let roots = super::parse_wayback_index(
+                r#"<a href="Ficha.aspx?Par=1&Lng=0">Primera</a><a href="Ficha.aspx?Par=2&Lng=0">Segunda</a>"#,
+                "20240511091123",
+                2,
+            );
+            let mut calls = 0;
+            let owner = if failure == "lease" {
+                "wrong owner"
+            } else {
+                "test"
+            };
+            let result = super::stream_wayback_fichas(
+                roots,
+                2024,
+                |_, _, _| {
+                    calls += 1;
+                    Ok(None)
+                },
+                &mut |event| {
+                    crate::handle_wayback_event(&store, owner, "Wayback bootstrap 1/26 (A)", event)
+                },
+            );
+            assert!(result.is_err(), "{failure}");
+            assert_eq!(calls, 0, "{failure}: cancelar solicitudes siguientes");
+            assert_eq!(store.wayback_bootstrap_next().unwrap(), Some('A'));
+            assert_eq!(store.count_source("cvc_wayback").unwrap(), 0);
+            drop(connection);
+            drop(store);
+            for suffix in ["", "-wal", "-shm"] {
+                let _ = std::fs::remove_file(format!("{}{suffix}", path.display()));
+            }
+        }
+    }
+
+    #[test]
+    fn streaming_keeps_root_before_variant_failure_and_cancels_writes() {
+        let root_html =
+            r#"<div id="idiomas"><a href="Ficha.aspx?Par=1&Lng=9"><acronym>EN</acronym></a></div>"#;
+        let roots = super::parse_wayback_index(
+            r#"<a href="Ficha.aspx?Par=1&Lng=0">Primera</a><a href="Ficha.aspx?Par=2&Lng=0">Segunda</a>"#,
+            "20240511091123",
+            2,
+        );
+        let store = crate::store::Store::open(std::path::Path::new(":memory:")).unwrap();
+        let mut calls = 0;
+        let result = super::stream_wayback_fichas(
+            roots.clone(),
+            2024,
+            |url, _, _| {
+                calls += 1;
+                if calls == 2 {
+                    return Err(super::retryable_request_error("variante 429"));
+                }
+                Ok(Some(super::CapturedFicha {
+                    html: root_html.into(),
+                    replay_url: url.clone(),
+                    timestamp: "20240511091123".into(),
+                }))
+            },
+            &mut |event| {
+                if let super::WaybackEvent::Entries(entries, pars) = event {
+                    store.insert_wayback(entries, pars)?;
+                }
+                Ok(())
+            },
+        );
+        assert!(result.is_err());
+        assert_eq!(calls, 2, "no solicitar segunda raíz");
+        assert_eq!(store.count_source("cvc_wayback").unwrap(), 1);
+
+        for fail_on_progress in [false, true] {
+            let mut calls = 0;
+            let result = super::stream_wayback_fichas(
+                roots.clone(),
+                2024,
+                |_, _, _| {
+                    calls += 1;
+                    Ok(None)
+                },
+                &mut |event| {
+                    if matches!(event, super::WaybackEvent::Progress { .. }) == fail_on_progress {
+                        anyhow::bail!("error de lease o persistencia");
+                    }
+                    Ok(())
+                },
+            );
+            assert!(result.is_err());
+            assert_eq!(calls, 0);
+        }
+    }
+
+    #[test]
+    fn streaming_saves_first_group_and_progress_before_second_root_failure() {
+        use std::cell::Cell;
+        let store = crate::store::Store::open(std::path::Path::new(":memory:")).unwrap();
+        let roots = super::parse_wayback_index(
+            r#"<a href="Ficha.aspx?Par=1&Lng=0">Primera</a><a href="Ficha.aspx?Par=2&Lng=0">Segunda</a>"#,
+            "20240511091123",
+            2,
+        );
+        let done = Cell::new(0);
+        let mut calls = 0;
+        let result = super::stream_wayback_fichas(
+            roots.clone(),
+            2024,
+            |_, _, _| {
+                calls += 1;
+                if calls == 2 {
+                    assert_eq!(
+                        store.count_source("cvc_wayback").unwrap(),
+                        2,
+                        "primer grupo y raíz del índice siguiente persistidos antes de segunda solicitud"
+                    );
+                    assert_eq!(done.get(), 1, "progreso real dentro de A");
+                    return Err(super::retryable_request_error("429 agotado"));
+                }
+                Ok(None)
+            },
+            &mut |event| {
+                match event {
+                    super::WaybackEvent::Entries(entries, pars) => {
+                        store.insert_wayback(entries, pars)?;
+                    }
+                    super::WaybackEvent::Progress { done: value, .. } => done.set(value),
+                }
+                Ok(())
+            },
+        );
+        assert!(result.is_err());
+        assert_eq!(calls, 2);
+        assert_eq!(store.count_source("cvc_wayback").unwrap(), 2);
+        super::stream_wayback_fichas(roots, 2024, |_, _, _| Ok(None), &mut |event| {
+            if let super::WaybackEvent::Entries(entries, pars) = event {
+                store.insert_wayback(entries, pars)?;
+            }
+            Ok(())
+        })
+        .unwrap();
+        assert_eq!(
+            store.count_source("cvc_wayback").unwrap(),
+            2,
+            "reanudación idempotente"
+        );
+    }
+
     use super::*;
 
     #[test]
@@ -720,6 +1233,19 @@ mod tests {
         let entries = parse_virtual(html, Category::Refran, "https://example.org/", 3);
         assert_eq!(entries.len(), 1);
         assert_eq!(entries[0].text, "A falta de pan, buenas son tortas.");
+    }
+
+    #[test]
+    fn parses_every_virtual_record_when_the_caller_requests_an_unbounded_page() {
+        let html = (0..55)
+            .map(|index| format!("<blockquote>Refrán número {index}.</blockquote>"))
+            .collect::<String>();
+        let category_url = "https://www.cervantesvirtual.com/portales/refranes_dichos_proverbios_citas_adivinanzas/refran/";
+
+        let entries = parse_virtual(&html, Category::Refran, category_url, usize::MAX);
+
+        assert_eq!(entries.len(), 55);
+        assert_eq!(entries.last().unwrap().text, "Refrán número 54.");
     }
 
     #[test]
@@ -804,6 +1330,103 @@ mod tests {
         assert_eq!(entries.len(), 2);
         assert_eq!(entries[0].group_id.as_deref(), Some("cvc:58807"));
         assert_eq!(entries[1].group_id.as_deref(), Some("cvc:58122"));
+    }
+
+    #[test]
+    fn index_navigation_without_empty_marker_keeps_a_pending() {
+        let html = r#"<html><head><title>Refranero multilingüe</title></head>
+            <body><a href="listado.aspx?letra=A">A</a><section>Contenido desconocido</section></body></html>"#;
+        let mut store = crate::store::Store::open(std::path::Path::new(":memory:")).unwrap();
+        let mut letters = Vec::new();
+        let result = crate::update::run_wayback_updates(
+            &mut store,
+            |_, letter, _, _| {
+                letters.push(letter);
+                let mut transport = FakeWayback {
+                    requests: crate::wayback_request::WaybackRequests::with_clock(ImportClock(
+                        Rc::new(Cell::new(Duration::ZERO)),
+                    )),
+                    responses: VecDeque::from([
+                        (
+                            200,
+                            available_capture(
+                                "https://cvc.cervantes.es/lengua/refranero/listado.aspx?letra=A",
+                            ),
+                            None,
+                        ),
+                        (200, html.into(), None),
+                    ]),
+                    on_send: |_: &str| {},
+                };
+                import_wayback_with_transport(&mut transport, letter, 2024, 2, |_| Ok(()))
+                    .map(|report| report.entries.len())
+            },
+            |_, _, _, _| {},
+        );
+        assert!(
+            result.is_err(),
+            "navegación intacta no demuestra que el índice esté vacío"
+        );
+        assert_eq!(letters, vec!['A']);
+        assert_eq!(store.wayback_bootstrap_next().unwrap(), Some('A'));
+        assert_eq!(store.wayback_cursor().unwrap(), None);
+    }
+
+    #[test]
+    fn accepts_a_successfully_fetched_index_with_no_fichas_as_empty() {
+        let html = r#"<!doctype html><html><head><title>Refranero multilingüe</title></head>
+            <body><a href="listado.aspx?letra=A">A</a>
+            <p>No hay paremias para esta letra.</p></body></html>"#;
+
+        assert!(validate_wayback_index_html(html, false).is_ok());
+        let entries = parse_wayback_index(html, "20240511091123", usize::MAX);
+
+        assert!(entries.is_empty());
+        let mut transport = FakeWayback {
+            requests: crate::wayback_request::WaybackRequests::with_clock(ImportClock(Rc::new(
+                Cell::new(Duration::ZERO),
+            ))),
+            responses: VecDeque::from([
+                (
+                    200,
+                    available_capture(
+                        "https://cvc.cervantes.es/lengua/refranero/listado.aspx?letra=A",
+                    ),
+                    None,
+                ),
+                (200, html.into(), None),
+            ]),
+            on_send: |_: &str| {},
+        };
+        let report =
+            import_wayback_with_transport(&mut transport, 'A', 2024, 2, |_| Ok(())).unwrap();
+        assert_eq!(report.roots_processed, 0);
+        assert!(report.entries.is_empty());
+    }
+
+    #[test]
+    fn rejects_soft_error_pages_instead_of_treating_them_as_empty_indexes() {
+        let html = r#"<!doctype html><html><head><title>Wayback Machine Error</title></head>
+            <body><h1>Sorry, this page is temporarily unavailable</h1></body></html>"#;
+
+        assert!(validate_wayback_index_html(html, false).is_err());
+    }
+
+    #[test]
+    fn rejects_unrecognized_cvc_markup_without_records_or_an_empty_marker() {
+        let html = r#"<!doctype html><html><head><title>Refranero</title></head>
+            <body><main><p>La estructura de la página ha cambiado.</p></main></body></html>"#;
+
+        assert!(validate_wayback_index_html(html, false).is_err());
+    }
+
+    #[test]
+    fn rejects_unrelated_listing_navigation_as_an_empty_cvc_index() {
+        let html = r#"<!doctype html><html><head><title>Refranero</title></head>
+            <body><a href="https://unrelated.example/listado.aspx?letra=A">A</a>
+            <p>Contenido sin índice.</p></body></html>"#;
+
+        assert!(validate_wayback_index_html(html, false).is_err());
     }
 
     #[test]
@@ -987,7 +1610,7 @@ mod tests {
                     .unwrap(),
                     timestamp: "20240511091123".into(),
                 })),
-                "ca" => Err(anyhow!("temporary archive failure")),
+                "ca" => Err(retryable_request_error("temporary archive failure")),
                 _ => Ok(None),
             }
             },
@@ -1016,6 +1639,7 @@ mod tests {
         );
         assert_eq!(report.unavailable, 1);
         assert_eq!(report.warnings.len(), 1);
+        assert_eq!(report.retryable_failures, 1);
         assert_eq!(report.warnings[0].par, "58807");
         assert_eq!(report.warnings[0].language.as_deref(), Some("ca"));
     }
@@ -1100,6 +1724,20 @@ mod tests {
     }
 
     #[test]
+    fn only_retryable_http_statuses_mark_wayback_request_failures() {
+        assert!(is_retryable_wayback_status(
+            reqwest::StatusCode::TOO_MANY_REQUESTS
+        ));
+        assert!(is_retryable_wayback_status(
+            reqwest::StatusCode::SERVICE_UNAVAILABLE
+        ));
+        assert!(is_retryable_wayback_status(
+            reqwest::StatusCode::REQUEST_TIMEOUT
+        ));
+        assert!(!is_retryable_wayback_status(reqwest::StatusCode::NOT_FOUND));
+    }
+
+    #[test]
     fn collects_available_ficha_captures_per_language() {
         let index = r#"<a href="Ficha.aspx?Par=58807&amp;Lng=0">Haz bien y no mires a quién</a>"#;
         let roots = parse_wayback_index(index, "20240511091123", 1);
@@ -1116,10 +1754,10 @@ mod tests {
             </div>
         </div></div>"#;
 
-        let report = collect_wayback_fichas(
+        let report = stream_wayback_fichas(
             roots,
             2024,
-            |url, _year| {
+            |url, _year, _events| {
                 let lng = url
                     .query_pairs()
                     .find(|(key, _)| key.eq_ignore_ascii_case("Lng"))
@@ -1129,7 +1767,7 @@ mod tests {
                     "0" => (root_html, "20240512091123"),
                     "9" => (english_html, "20240513091123"),
                     "10" => return Ok(None),
-                    "1" => return Err(anyhow!("temporary archive failure")),
+                    "1" => (root_html, "20240514091123"),
                     _ => panic!("unexpected Lng={lng}"),
                 };
                 Ok(Some(CapturedFicha {
@@ -1142,11 +1780,12 @@ mod tests {
                     timestamp: timestamp.into(),
                 }))
             },
-            &mut |_, _| {},
-        );
+            &mut |_| Ok(()),
+        )
+        .unwrap();
 
         assert_eq!(report.roots_processed, 1);
-        assert_eq!(report.variants_available, 2);
+        assert_eq!(report.variants_available, 3);
         assert_eq!(report.variants_unavailable, 1);
         assert!(report.captured_spanish_pars.contains("58807"));
         assert_eq!(report.entries.len(), 2);
@@ -1166,10 +1805,47 @@ mod tests {
     }
 
     #[test]
+    fn parse_and_language_warnings_are_not_retryable_request_failures() {
+        let links = vec![WaybackLanguageLink {
+            language: "en".into(),
+            original_url: Url::parse(
+                "https://cvc.cervantes.es/lengua/refranero/Ficha.aspx?Par=58807&Lng=9",
+            )
+            .unwrap(),
+            par: "58807".into(),
+        }];
+
+        let report = collect_wayback_variants(
+            &links,
+            |_| {
+                Ok(Some(CapturedFicha {
+                    html: "<html><body>Ficha sin Enunciado</body></html>".into(),
+                    replay_url: Url::parse(
+                        "https://web.archive.org/web/20240511091123/https://cvc.cervantes.es/lengua/refranero/Ficha.aspx?Par=58807&Lng=9",
+                    )
+                    .unwrap(),
+                    timestamp: "20240511091123".into(),
+                }))
+            },
+            &mut || {},
+        );
+
+        assert_eq!(report.retryable_failures, 0);
+        assert_eq!(report.warnings.len(), 1);
+        assert!(report.warnings[0].reason.contains("no primary Enunciado"));
+    }
+
+    #[test]
     fn keeps_index_record_when_spanish_ficha_has_no_capture() {
         let index = r#"<a href="Ficha.aspx?Par=58807&amp;Lng=0">Haz bien y no mires a quién</a>"#;
         let roots = parse_wayback_index(index, "20240511091123", 1);
-        let report = collect_wayback_fichas(roots, 2024, |_url, _year| Ok(None), &mut |_, _| {});
+        let report = stream_wayback_fichas(
+            roots,
+            2024,
+            |_url, _year, _events| Ok(None),
+            &mut |_| Ok(()),
+        )
+        .unwrap();
 
         assert_eq!(report.entries.len(), 1);
         assert_eq!(report.entries[0].language, "es");

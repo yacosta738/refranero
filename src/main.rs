@@ -6,6 +6,7 @@ mod refresh;
 mod session;
 mod store;
 mod update;
+mod wayback_request;
 
 use anyhow::{bail, Context, Result};
 use clap::{Parser, Subcommand};
@@ -218,27 +219,40 @@ fn schedule_background_refresh(cli: &Cli, db: &Path, store: &Store, allow_waybac
         return;
     }
     let now = unix_timestamp();
-    let virtual_due = match store.last_successful_refresh() {
-        Ok(value) => {
-            refresh::refresh_decision(value, now, false) == refresh::RefreshDecision::Stale
-        }
+    let last_virtual = match store.last_successful_refresh() {
+        Ok(value) => value,
         Err(error) => {
             eprintln!("Warning: could not check catalog age: {error:#}");
             return;
         }
     };
-    let wayback_due = allow_wayback
-        && match store.last_wayback_refresh() {
-            Ok(value) => {
-                refresh::wayback_refresh_decision(value, now, false)
-                    == refresh::RefreshDecision::Stale
-            }
+    let wayback_bootstrap_pending = allow_wayback
+        && match store.wayback_bootstrap_next() {
+            Ok(next) => next.is_some(),
             Err(error) => {
-                eprintln!("Warning: could not check Wayback age: {error:#}");
+                eprintln!("Warning: could not check Wayback bootstrap state: {error:#}");
                 false
             }
         };
-    if !virtual_due && !wayback_due {
+    let last_wayback = if allow_wayback && !wayback_bootstrap_pending {
+        match store.last_wayback_refresh() {
+            Ok(value) => value,
+            Err(error) => {
+                eprintln!("Warning: could not check Wayback age: {error:#}");
+                Some(now)
+            }
+        }
+    } else {
+        None
+    };
+    let scope = update::background_scope(
+        last_virtual,
+        last_wayback,
+        now,
+        allow_wayback,
+        wayback_bootstrap_pending,
+    );
+    if scope.is_empty() {
         return;
     }
     let owner = worker_owner();
@@ -250,7 +264,7 @@ fn schedule_background_refresh(cli: &Cli, db: &Path, store: &Store, allow_waybac
             return;
         }
     }
-    if let Err(error) = spawn_refresh_worker(db, &owner, wayback_due) {
+    if let Err(error) = spawn_refresh_worker(db, &owner, scope.wayback) {
         let _ = store.release_refresh_lease(&owner);
         eprintln!("Warning: could not start catalog refresh worker: {error:#}");
     }
@@ -304,7 +318,18 @@ fn run_refresh_worker(db: &Path, owner: &str, allow_wayback: bool, force: bool) 
     let mut store = Store::open(db)?;
     let now = unix_timestamp();
     let last_virtual = store.last_successful_refresh()?;
-    let last_wayback = if allow_wayback {
+    let bootstrap_pending = if allow_wayback {
+        match store.wayback_bootstrap_next() {
+            Ok(next) => next.is_some(),
+            Err(error) => {
+                eprintln!("Warning: could not check Wayback bootstrap state: {error:#}");
+                false
+            }
+        }
+    } else {
+        false
+    };
+    let last_wayback = if allow_wayback && !bootstrap_pending {
         match store.last_wayback_refresh() {
             Ok(value) => value,
             Err(error) => {
@@ -342,7 +367,8 @@ fn refresh_virtual(store: &mut Store, owner: &str) -> Result<()> {
         }
         publish_progress(store, "Cervantes Virtual", index, total);
         let client = ingest::http_client_with_timeout(std::time::Duration::from_secs(5))?;
-        let entries = ingest::import_virtual(&client, category, 50)?;
+        // Automatic refreshes are full snapshots. Explicit `sync` keeps its user-selected limit.
+        let entries = ingest::import_virtual(&client, category, usize::MAX)?;
         if entries.is_empty() {
             bail!(
                 "no entries parsed from portal category {}; keeping cached catalog",
@@ -359,46 +385,82 @@ fn refresh_virtual(store: &mut Store, owner: &str) -> Result<()> {
 }
 
 fn refresh_wayback(store: &mut Store, owner: &str) -> Result<()> {
-    let letter = refresh::next_letter(store.wayback_cursor()?);
-    let phase = format!("Wayback {letter}");
-    let client = ingest::http_client_with_timeout(std::time::Duration::from_secs(5))?;
-    let mut lease_lost = false;
-    let report = ingest::import_wayback_with_progress(
-        &client,
-        letter,
-        refresh::year_from_unix(unix_timestamp()),
-        refresh::AUTOMATIC_WAYBACK_LIMIT,
-        |done, total| {
-            if lease_lost {
-                return;
+    let client = ingest::wayback_client_with_timeout(std::time::Duration::from_secs(5))?;
+    let mut requests = wayback_request::WaybackRequests::new();
+    update::run_wayback_updates(
+        store,
+        |store, letter, bootstrap, _position| {
+            if !store.renew_refresh_lease(unix_timestamp(), owner)? {
+                bail!("refresh lease lost before the Wayback letter {letter}");
             }
-            match store.renew_refresh_lease(unix_timestamp(), owner) {
-                Ok(true) => publish_progress(store, &phase, done, total),
-                Ok(false) | Err(_) => lease_lost = true,
+            let phase = wayback_phase(letter, bootstrap);
+            let report = ingest::import_wayback_stream(
+                &client,
+                &mut requests,
+                letter,
+                refresh::year_from_unix(unix_timestamp()),
+                if bootstrap {
+                    usize::MAX
+                } else {
+                    refresh::AUTOMATIC_WAYBACK_LIMIT
+                },
+                |event| handle_wayback_event(store, owner, &phase, event),
+            )?;
+            for warning in &report.warnings {
+                eprintln!(
+                    "Wayback {letter} warning: Par={} language={}: {}",
+                    warning.par,
+                    warning.language.as_deref().unwrap_or("unknown"),
+                    warning.reason
+                );
             }
+            eprintln!(
+                "Wayback {letter} refresh: {} roots saved continuously, {} warnings.",
+                report.roots_processed,
+                report.warnings.len()
+            );
+            Ok(report.entries.len())
         },
+        |_, _, _, _| {},
     )?;
-    if lease_lost {
-        bail!("refresh lease lost during the Wayback run; not writing results");
+    Ok(())
+}
+
+fn wayback_phase(letter: char, bootstrap: bool) -> String {
+    if bootstrap {
+        let position = u32::from(letter) - u32::from('A') + 1;
+        format!("Wayback bootstrap {position}/26 ({letter})")
+    } else {
+        format!("Wayback {letter}")
     }
-    if report.entries.is_empty() {
-        bail!("no CVC fichas discovered in the archived index for letter {letter}");
+}
+
+fn handle_wayback_event(
+    store: &Store,
+    owner: &str,
+    phase: &str,
+    event: ingest::WaybackEvent<'_>,
+) -> Result<()> {
+    if !store.renew_refresh_lease(unix_timestamp(), owner)? {
+        bail!("refresh lease lost during the Wayback run; letter interrupted");
     }
-    let inserted = store.insert_wayback(&report.entries, &report.captured_spanish_pars)?;
-    for warning in &report.warnings {
-        eprintln!(
-            "Wayback {letter} warning: Par={} language={}: {}",
-            warning.par,
-            warning.language.as_deref().unwrap_or("unknown"),
-            warning.reason
-        );
+    match event {
+        ingest::WaybackEvent::Entries(entries, pars) => {
+            store.insert_wayback(entries, pars)?;
+        }
+        ingest::WaybackEvent::Progress {
+            activity,
+            done,
+            total,
+        } => {
+            store.set_refresh_progress(&store::RefreshProgress {
+                phase: format!("{phase} {activity}"),
+                done,
+                total,
+                updated_at: unix_timestamp(),
+            })?;
+        }
     }
-    store.record_wayback_success(letter, unix_timestamp())?;
-    eprintln!(
-        "Wayback {letter} refresh: {} roots, {inserted} new entries, {} warnings.",
-        report.roots_processed,
-        report.warnings.len()
-    );
     Ok(())
 }
 
@@ -495,7 +557,21 @@ fn sync(source: &SyncSource, store: &mut Store) -> Result<()> {
             limit,
         } => {
             validate_import_limit(limit)?;
-            let report = ingest::import_wayback(&client, letter, year, limit)?;
+            let client = ingest::wayback_client_with_timeout(std::time::Duration::from_secs(20))?;
+            let mut requests = wayback_request::WaybackRequests::new();
+            let report = ingest::import_wayback_stream(
+                &client,
+                &mut requests,
+                letter,
+                year,
+                limit,
+                |event| {
+                    if let ingest::WaybackEvent::Entries(entries, pars) = event {
+                        inserted += store.insert_wayback(entries, pars)?;
+                    }
+                    Ok(())
+                },
+            )?;
             if report.entries.is_empty() {
                 bail!("no CVC fichas discovered in archived index; inspect the snapshot markup");
             }
@@ -514,7 +590,6 @@ fn sync(source: &SyncSource, store: &mut Store) -> Result<()> {
                     warning.reason
                 );
             }
-            inserted = store.insert_wayback(&report.entries, &report.captured_spanish_pars)?;
         }
     }
     println!(
@@ -529,4 +604,37 @@ fn validate_import_limit(limit: usize) -> Result<()> {
         bail!("import --limit must be between 1 and 50");
     }
     Ok(())
+}
+
+#[cfg(test)]
+mod wayback_progress_tests {
+    use super::*;
+    #[test]
+    fn resumed_bootstrap_identifies_absolute_letter_position() {
+        assert_eq!(wayback_phase('D', true), "Wayback bootstrap 4/26 (D)");
+        assert_eq!(wayback_phase('Z', true), "Wayback bootstrap 26/26 (Z)");
+        assert_eq!(wayback_phase('D', false), "Wayback D");
+    }
+
+    #[test]
+    fn bootstrap_progress_uses_fichas_not_letters() {
+        let store = Store::open(Path::new(":memory:")).unwrap();
+        store
+            .try_acquire_refresh_lease(unix_timestamp(), "test")
+            .unwrap();
+        handle_wayback_event(
+            &store,
+            "test",
+            "Wayback bootstrap 1/26 (A)",
+            ingest::WaybackEvent::Progress {
+                done: 1,
+                total: 50,
+                activity: "",
+            },
+        )
+        .unwrap();
+        let progress = store.refresh_progress().unwrap().unwrap();
+        assert_eq!((progress.done, progress.total), (1, 50));
+        assert!(progress.phase.contains("1/26 (A)"));
+    }
 }

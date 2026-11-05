@@ -14,6 +14,13 @@ pub struct UpdateScope {
     pub wayback: bool,
 }
 
+/// Work completed by one Wayback update operation.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct WaybackUpdateSummary {
+    pub letters_processed: usize,
+    pub entries_processed: usize,
+}
+
 impl UpdateScope {
     /// Whether the worker has nothing to do.
     pub const fn is_empty(self) -> bool {
@@ -39,6 +46,23 @@ pub fn update_scope(
             && (force
                 || wayback_refresh_decision(last_wayback, now, false) == RefreshDecision::Stale),
     }
+}
+
+/// Decide the automatic scope without allowing one-shot output to start a full bootstrap.
+/// User-visible interactive refreshes may include Wayback; ordinary automatic reads do not.
+pub fn background_scope(
+    last_virtual: Option<i64>,
+    last_wayback: Option<i64>,
+    now: i64,
+    user_visible: bool,
+    wayback_bootstrap_pending: bool,
+) -> UpdateScope {
+    let last_wayback = if wayback_bootstrap_pending {
+        None
+    } else {
+        last_wayback
+    };
+    update_scope(last_virtual, last_wayback, now, user_visible, false)
 }
 
 /// Run the selected sources, clear published progress and release the lease.
@@ -102,6 +126,44 @@ where
     Ok(())
 }
 
+/// Drive the persistent Wayback state machine through bootstrap or one incremental letter.
+/// `process_letter` must persist any usable entries before returning an error for retryable
+/// partial failures. The cursor advances only after that callback returns success.
+pub fn run_wayback_updates<F, P>(
+    store: &mut Store,
+    mut process_letter: F,
+    mut on_complete: P,
+) -> Result<WaybackUpdateSummary>
+where
+    F: FnMut(&mut Store, char, bool, usize) -> Result<usize>,
+    P: FnMut(&Store, char, bool, usize),
+{
+    let bootstrap = store.wayback_bootstrap_next()?.is_some();
+    if bootstrap {
+        let mut summary = WaybackUpdateSummary {
+            letters_processed: 0,
+            entries_processed: 0,
+        };
+        while let Some(letter) = store.wayback_bootstrap_next()? {
+            let position = summary.letters_processed + 1;
+            summary.entries_processed += process_letter(store, letter, true, position)?;
+            store.record_wayback_bootstrap_success(letter, unix_timestamp())?;
+            summary.letters_processed = position;
+            on_complete(store, letter, true, position);
+        }
+        Ok(summary)
+    } else {
+        let letter = crate::refresh::next_letter(store.wayback_cursor()?);
+        let entries_processed = process_letter(store, letter, false, 1)?;
+        store.record_wayback_success(letter, unix_timestamp())?;
+        on_complete(store, letter, false, 1);
+        Ok(WaybackUpdateSummary {
+            letters_processed: 1,
+            entries_processed,
+        })
+    }
+}
+
 fn unix_timestamp() -> i64 {
     std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)
@@ -113,7 +175,8 @@ fn unix_timestamp() -> i64 {
 mod tests {
     use std::cell::Cell;
 
-    use super::{run_worker, update_scope, UpdateScope};
+    use super::{background_scope, run_wayback_updates, run_worker, update_scope, UpdateScope};
+    use crate::domain::NewSaying;
     use crate::refresh::{REFRESH_INTERVAL_SECONDS, WAYBACK_REFRESH_INTERVAL_SECONDS};
     use crate::store::{RefreshProgress, Store};
 
@@ -197,6 +260,141 @@ mod tests {
                 wayback: false,
             }
         );
+    }
+
+    #[test]
+    fn non_interactive_automatic_scope_does_not_start_wayback_bootstrap() {
+        let stale_virtual = Some(NOW - REFRESH_INTERVAL_SECONDS - 1);
+        let stale_wayback = Some(NOW - WAYBACK_REFRESH_INTERVAL_SECONDS - 1);
+
+        let scope = background_scope(stale_virtual, stale_wayback, NOW, false, true);
+
+        assert_eq!(
+            scope,
+            UpdateScope {
+                virtual_source: true,
+                wayback: false,
+            }
+        );
+    }
+
+    #[test]
+    fn bootstrap_retries_failed_letter_then_processes_all_remaining_letters() {
+        let mut store = Store::open(std::path::Path::new(":memory:")).unwrap();
+        let mut first_attempt = Vec::new();
+        let result = run_wayback_updates(
+            &mut store,
+            |store, letter, bootstrap, _position| {
+                assert!(bootstrap);
+                first_attempt.push(letter);
+                if letter == 'C' {
+                    return Ok(0); // Validated empty letter; it still counts as checked.
+                }
+                let entry = bootstrap_entry(letter);
+                store.insert_wayback(&[entry], &Default::default())?;
+                if letter == 'D' {
+                    anyhow::bail!("temporary request failure");
+                }
+                Ok(1)
+            },
+            |_, _, _, _| {},
+        );
+
+        assert!(result.is_err());
+        assert_eq!(first_attempt, vec!['A', 'B', 'C', 'D']);
+        assert_eq!(store.wayback_bootstrap_next().unwrap(), Some('D'));
+        assert_eq!(store.count_source("cvc_wayback").unwrap(), 3);
+
+        let mut resumed = Vec::new();
+        let processed = run_wayback_updates(
+            &mut store,
+            |store, letter, bootstrap, _position| {
+                assert!(bootstrap);
+                resumed.push(letter);
+                store.insert_wayback(&[bootstrap_entry(letter)], &Default::default())?;
+                Ok(1)
+            },
+            |_, _, _, _| {},
+        )
+        .unwrap();
+
+        assert_eq!(processed.letters_processed, 23);
+        assert_eq!(processed.entries_processed, 23);
+        assert_eq!(resumed, ('D'..='Z').collect::<Vec<_>>());
+        assert_eq!(store.wayback_bootstrap_next().unwrap(), None);
+        assert_eq!(store.count_source("cvc_wayback").unwrap(), 25);
+    }
+
+    #[test]
+    fn completed_bootstrap_uses_one_incremental_letter() {
+        let mut store = Store::open(std::path::Path::new(":memory:")).unwrap();
+        for letter in 'A'..='Z' {
+            store
+                .record_wayback_bootstrap_success(letter, i64::from(letter as u32))
+                .unwrap();
+        }
+        let mut calls = Vec::new();
+
+        let processed = run_wayback_updates(
+            &mut store,
+            |_, letter, bootstrap, position| {
+                calls.push((letter, bootstrap, position));
+                Ok(1)
+            },
+            |_, _, _, _| {},
+        )
+        .unwrap();
+
+        assert_eq!(processed.letters_processed, 1);
+        assert_eq!(processed.entries_processed, 1);
+        assert_eq!(calls, vec![('A', false, 1)]);
+        assert_eq!(store.wayback_cursor().unwrap(), Some('A'));
+    }
+
+    #[test]
+    fn incremental_refresh_advances_after_a_valid_empty_letter() {
+        let mut store = Store::open(std::path::Path::new(":memory:")).unwrap();
+        for letter in 'A'..='Z' {
+            store
+                .record_wayback_bootstrap_success(letter, i64::from(letter as u32))
+                .unwrap();
+        }
+        store.record_wayback_success('A', NOW).unwrap();
+
+        let processed = run_wayback_updates(
+            &mut store,
+            |_, letter, bootstrap, _| {
+                assert_eq!(letter, 'B');
+                assert!(!bootstrap);
+                // An empty entry set is a successful outcome after the importer validates the index.
+                Ok(0)
+            },
+            |_, _, _, _| {},
+        )
+        .unwrap();
+
+        assert_eq!(processed.letters_processed, 1);
+        assert_eq!(processed.entries_processed, 0);
+        assert_eq!(store.wayback_cursor().unwrap(), Some('B'));
+    }
+
+    fn bootstrap_entry(letter: char) -> crate::domain::NewSaying {
+        NewSaying {
+            text: format!("Bootstrap fixture {letter}"),
+            category: "paremia".into(),
+            language: "es".into(),
+            source: "cvc_wayback".into(),
+            source_url: format!(
+                "https://web.archive.org/web/20240511091123/https://cvc.cervantes.es/lengua/refranero/Ficha.aspx?Par={}&Lng=0",
+                u32::from(letter)
+            ),
+            original_url: Some(format!(
+                "https://cvc.cervantes.es/lengua/refranero/Ficha.aspx?Par={}&Lng=0",
+                u32::from(letter)
+            )),
+            captured_at: Some("20240511091123".into()),
+            group_id: Some(format!("cvc:{}", u32::from(letter))),
+        }
     }
 
     #[test]

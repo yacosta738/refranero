@@ -13,6 +13,8 @@ const REFRESH_PROGRESS_KEY: &str = "refresh_progress";
 const REFRESH_ERROR_KEY: &str = "last_refresh_error";
 const WAYBACK_REFRESH_KEY: &str = "last_wayback_refresh";
 const WAYBACK_CURSOR_KEY: &str = "wayback_cursor";
+const WAYBACK_BOOTSTRAP_NEXT_KEY: &str = "wayback_bootstrap_next";
+const WAYBACK_BOOTSTRAP_COMPLETE_KEY: &str = "wayback_bootstrap_complete";
 
 /// Progress of the background refresh, published by the worker for the reader.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -236,6 +238,65 @@ impl Store {
                 "INSERT INTO metadata(key, value) VALUES (?1, ?2)
                  ON CONFLICT(key) DO UPDATE SET value = excluded.value",
                 params![key, value],
+            )?;
+        }
+        transaction.commit()?;
+        Ok(())
+    }
+
+    /// Return the next bootstrap letter, or `None` after the full index is imported.
+    /// Missing state means a legacy or new catalog still needs its initial A-Z pass.
+    pub fn wayback_bootstrap_next(&self) -> Result<Option<char>> {
+        if self.metadata(WAYBACK_BOOTSTRAP_COMPLETE_KEY)?.as_deref() == Some("true") {
+            return Ok(None);
+        }
+        let value = self.metadata(WAYBACK_BOOTSTRAP_NEXT_KEY)?;
+        let letter = value
+            .as_deref()
+            .and_then(|value| value.chars().next())
+            .unwrap_or('A')
+            .to_ascii_uppercase();
+        if !letter.is_ascii_uppercase() {
+            anyhow::bail!("invalid Wayback bootstrap letter in catalog metadata");
+        }
+        Ok(Some(letter))
+    }
+
+    /// Commit one successful bootstrap letter and its resume point atomically.
+    pub fn record_wayback_bootstrap_success(&mut self, letter: char, timestamp: i64) -> Result<()> {
+        let letter = letter.to_ascii_uppercase();
+        if !letter.is_ascii_uppercase() {
+            anyhow::bail!("Wayback bootstrap letter must be A-Z");
+        }
+        let transaction = self.connection.transaction()?;
+        for (key, value) in [
+            (WAYBACK_REFRESH_KEY, timestamp.to_string()),
+            (WAYBACK_CURSOR_KEY, letter.to_string()),
+        ] {
+            transaction.execute(
+                "INSERT INTO metadata(key, value) VALUES (?1, ?2)
+                 ON CONFLICT(key) DO UPDATE SET value = excluded.value",
+                params![key, value],
+            )?;
+        }
+        if letter == 'Z' {
+            transaction.execute(
+                "INSERT INTO metadata(key, value) VALUES (?1, 'true')
+                 ON CONFLICT(key) DO UPDATE SET value = excluded.value",
+                [WAYBACK_BOOTSTRAP_COMPLETE_KEY],
+            )?;
+            transaction.execute(
+                "DELETE FROM metadata WHERE key = ?1",
+                [WAYBACK_BOOTSTRAP_NEXT_KEY],
+            )?;
+        } else {
+            transaction.execute(
+                "INSERT INTO metadata(key, value) VALUES (?1, ?2)
+                 ON CONFLICT(key) DO UPDATE SET value = excluded.value",
+                params![
+                    WAYBACK_BOOTSTRAP_NEXT_KEY,
+                    (((letter as u8) + 1) as char).to_string()
+                ],
             )?;
         }
         transaction.commit()?;
@@ -1189,5 +1250,60 @@ mod tests {
         store.record_wayback_success('C', 42).unwrap();
         assert_eq!(store.last_wayback_refresh().unwrap(), Some(42));
         assert_eq!(store.wayback_cursor().unwrap(), Some('C'));
+    }
+
+    #[test]
+    fn wayback_bootstrap_starts_at_a_and_advances_only_after_success() {
+        let mut store = Store::open(Path::new(":memory:")).unwrap();
+
+        assert_eq!(store.wayback_bootstrap_next().unwrap(), Some('A'));
+        assert!(store.record_wayback_bootstrap_success('?', 41).is_err());
+        assert_eq!(store.wayback_bootstrap_next().unwrap(), Some('A'));
+        store.record_wayback_bootstrap_success('A', 42).unwrap();
+        assert_eq!(store.wayback_bootstrap_next().unwrap(), Some('B'));
+        assert_eq!(store.wayback_cursor().unwrap(), Some('A'));
+    }
+
+    #[test]
+    fn resumes_wayback_bootstrap_after_reopening_the_catalog() {
+        let path = std::env::temp_dir().join(format!(
+            "refranero-wayback-bootstrap-{}-{:?}.sqlite3",
+            std::process::id(),
+            std::thread::current().id()
+        ));
+        for suffix in ["", "-wal", "-shm"] {
+            let _ = std::fs::remove_file(format!("{}{suffix}", path.display()));
+        }
+
+        {
+            let mut store = Store::open(&path).unwrap();
+            store.record_wayback_bootstrap_success('A', 42).unwrap();
+        }
+
+        let store = Store::open(&path).unwrap();
+        assert_eq!(store.wayback_bootstrap_next().unwrap(), Some('B'));
+        drop(store);
+        for suffix in ["", "-wal", "-shm"] {
+            let _ = std::fs::remove_file(format!("{}{suffix}", path.display()));
+        }
+    }
+
+    #[test]
+    fn wayback_bootstrap_is_complete_only_after_z() {
+        let mut store = Store::open(Path::new(":memory:")).unwrap();
+        let mut processed = Vec::new();
+        for letter in 'A'..='Y' {
+            store
+                .record_wayback_bootstrap_success(letter, i64::from(letter as u32))
+                .unwrap();
+            processed.push(letter);
+        }
+        assert_eq!(store.wayback_bootstrap_next().unwrap(), Some('Z'));
+
+        store.record_wayback_bootstrap_success('Z', 100).unwrap();
+        processed.push('Z');
+        assert_eq!(processed, ('A'..='Z').collect::<Vec<_>>());
+        assert_eq!(store.wayback_bootstrap_next().unwrap(), None);
+        assert_eq!(store.wayback_cursor().unwrap(), Some('Z'));
     }
 }
