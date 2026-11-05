@@ -136,9 +136,11 @@ Press `u` to request an update at any time, even when the catalog is still
 fresh. The reader acquires the refresh lease and starts a forced worker as a
 separate process, so keys, language changes and navigation keep working while
 Cervantes Virtual and Wayback refresh in sequence. The same progress bar shows
-the current phase; when the worker finishes, the bar disappears and the reader
-announces `Catálogo actualizado`. If another worker already owns the lease, the
-reader does not start a duplicate and says `Ya hay una actualización en curso`.
+the current phase; when the worker finishes, the bar disappears. When a source
+refresh stores new data, the reader announces `Catálogo actualizado`. If both
+sources fail, the reader shows the failure message instead. If another worker
+already owns the lease, the reader does not start a duplicate and says
+`Ya hay una actualización en curso`.
 `--offline` disables the manual update with an explicit notice.
 
 | Key | Action |
