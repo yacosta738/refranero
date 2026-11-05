@@ -131,7 +131,7 @@ mod tests {
 
     #[test]
     fn concurrent_invocations_request_only_one_worker() {
-        let mut store = crate::store::Store::open(std::path::Path::new(":memory:")).unwrap();
+        let store = crate::store::Store::open(std::path::Path::new(":memory:")).unwrap();
         assert!(store.try_acquire_refresh_lease(10_000, "worker-a").unwrap());
         assert!(!store.try_acquire_refresh_lease(10_001, "worker-b").unwrap());
         store.release_refresh_lease("worker-b").unwrap();
@@ -141,7 +141,7 @@ mod tests {
 
     #[test]
     fn expired_worker_lease_can_be_reclaimed() {
-        let mut store = crate::store::Store::open(std::path::Path::new(":memory:")).unwrap();
+        let store = crate::store::Store::open(std::path::Path::new(":memory:")).unwrap();
         assert!(store.try_acquire_refresh_lease(10_000, "worker-a").unwrap());
         assert!(store
             .try_acquire_refresh_lease(10_000 + super::REFRESH_LEASE_SECONDS + 1, "worker-b")

@@ -1,0 +1,28 @@
+---
+source: src/presentation/screen.rs
+expression: compose(&options)
+---
+
+
+
+  ESTADÍSTICAS
+────────────────────────────────────────
+
+  Total: 148 entradas
+
+  POR CATEGORÍA
+  Refrán         55  ████████░░░░░░░░░░░░░░░░   37%
+  Cita literaria 50  ████████░░░░░░░░░░░░░░░░   33%
+  Proverbio      16  ██░░░░░░░░░░░░░░░░░░░░░░   10%
+  Dicho          12  █░░░░░░░░░░░░░░░░░░░░░░░    8%
+  Paremia        10  █░░░░░░░░░░░░░░░░░░░░░░░    6%
+  Adivinanza      5  ░░░░░░░░░░░░░░░░░░░░░░░░    3%
+
+  POR IDIOMA
+  Español 144  ███████████████████████░   97%
+  Inglés    3  ░░░░░░░░░░░░░░░░░░░░░░░░    2%
+  Catalán   1  ░░░░░░░░░░░░░░░░░░░░░░░░    0%
+
+
+
+  s volver · ? ayuda · q salir

@@ -10,6 +10,7 @@ use std::path::Path;
 const SOURCE_LINK_MIGRATION_KEY: &str = "source_link_migration_version";
 const SOURCE_LINK_MIGRATION_VERSION: &str = "1";
 const REFRESH_PROGRESS_KEY: &str = "refresh_progress";
+const REFRESH_ERROR_KEY: &str = "last_refresh_error";
 const WAYBACK_REFRESH_KEY: &str = "last_wayback_refresh";
 const WAYBACK_CURSOR_KEY: &str = "wayback_cursor";
 
@@ -19,6 +20,13 @@ pub struct RefreshProgress {
     pub phase: String,
     pub done: usize,
     pub total: usize,
+    pub updated_at: i64,
+}
+
+/// Last failed update, published by the worker for the reader.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct RefreshError {
+    pub message: String,
     pub updated_at: i64,
 }
 
@@ -146,8 +154,13 @@ impl Store {
     }
 
     /// Acquire the background refresh lease if no active worker owns it.
-    pub fn try_acquire_refresh_lease(&mut self, now: i64, owner: &str) -> Result<bool> {
-        let transaction = self.connection.transaction()?;
+    ///
+    /// The caller only needs shared access: the session may hold the lease while the reader
+    /// keeps using the catalog.
+    pub fn try_acquire_refresh_lease(&self, now: i64, owner: &str) -> Result<bool> {
+        // No other transaction runs on this connection at this point, so the unchecked
+        // transaction is safe and does not require `&mut self`.
+        let transaction = self.connection.unchecked_transaction()?;
         transaction.execute(
             "INSERT INTO metadata(key, value) VALUES ('refresh_lease_until', ?1)
              ON CONFLICT(key) DO UPDATE SET value = excluded.value
@@ -248,6 +261,30 @@ impl Store {
             return Ok(None);
         };
         Ok(serde_json::from_str(&value).ok())
+    }
+
+    /// Publish the last update failure for the interactive reader.
+    pub fn record_refresh_error(&self, message: &str, updated_at: i64) -> Result<()> {
+        let value = serde_json::to_string(&RefreshError {
+            message: message.to_owned(),
+            updated_at,
+        })?;
+        self.set_metadata(REFRESH_ERROR_KEY, &value)
+    }
+
+    /// Read the last update failure. Corrupt or missing values read as `None`.
+    pub fn refresh_error(&self) -> Result<Option<RefreshError>> {
+        let Some(value) = self.metadata(REFRESH_ERROR_KEY)? else {
+            return Ok(None);
+        };
+        Ok(serde_json::from_str(&value).ok())
+    }
+
+    /// Remove the last update failure after a successful run.
+    pub fn clear_refresh_error(&self) -> Result<()> {
+        self.connection
+            .execute("DELETE FROM metadata WHERE key = ?1", [REFRESH_ERROR_KEY])?;
+        Ok(())
     }
 
     /// Remove published progress, but only while `owner` still holds the refresh lease.
@@ -539,6 +576,30 @@ impl Store {
         rows.collect::<rusqlite::Result<Vec<_>>>()
             .map_err(Into::into)
     }
+
+    /// Count entries by category, biggest first.
+    ///
+    /// The tie break on the identifier keeps the order stable between calls.
+    pub fn category_totals(&self) -> Result<Vec<(String, i64)>> {
+        self.grouped_counts("category")
+    }
+
+    /// Count entries by language, biggest first.
+    pub fn language_totals(&self) -> Result<Vec<(String, i64)>> {
+        self.grouped_counts("language")
+    }
+
+    fn grouped_counts(&self, column: &str) -> Result<Vec<(String, i64)>> {
+        // The column comes from the code, never from user input.
+        let sql = format!(
+            "SELECT {column}, COUNT(*) FROM sayings GROUP BY {column}
+             ORDER BY COUNT(*) DESC, {column} ASC"
+        );
+        let mut stmt = self.connection.prepare(&sql)?;
+        let rows = stmt.query_map([], |r| Ok((r.get(0)?, r.get(1)?)))?;
+        rows.collect::<rusqlite::Result<Vec<_>>>()
+            .map_err(Into::into)
+    }
 }
 
 fn read_saying(row: &rusqlite::Row<'_>) -> rusqlite::Result<Saying> {
@@ -560,6 +621,101 @@ fn read_saying(row: &rusqlite::Row<'_>) -> rusqlite::Result<Saying> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn counted_entry(text: &str, category: &str, language: &str) -> NewSaying {
+        NewSaying {
+            text: text.to_owned(),
+            category: category.to_owned(),
+            language: language.to_owned(),
+            source: "manual".to_owned(),
+            source_url: "https://cvc.cervantes.es/lengua/refranero/ficha.aspx?Par=1&Lng=1"
+                .to_owned(),
+            original_url: None,
+            captured_at: None,
+            group_id: None,
+        }
+    }
+
+    #[test]
+    fn category_totals_group_by_category_and_order_by_volume() {
+        let store = Store::open(Path::new(":memory:")).unwrap();
+        let before = store.category_totals().unwrap();
+        let base = |id: &str| {
+            before
+                .iter()
+                .find(|(key, _)| key == id)
+                .map(|(_, count)| *count)
+                .unwrap_or(0)
+        };
+        let entries = vec![
+            counted_entry("A", "refran", "es"),
+            counted_entry("B", "refran", "es"),
+            counted_entry("C", "refran", "es"),
+            counted_entry("D", "cita", "es"),
+        ];
+        store.insert(&entries).unwrap();
+
+        let totals = store.category_totals().unwrap();
+        let refranes = totals.iter().find(|(id, _)| id == "refran").unwrap();
+        let citas = totals.iter().find(|(id, _)| id == "cita").unwrap();
+        assert_eq!(refranes.1, base("refran") + 3);
+        assert_eq!(citas.1, base("cita") + 1);
+        // The biggest category comes first.
+        assert_eq!(totals.first().map(|(id, _)| id.as_str()), Some("refran"));
+    }
+
+    #[test]
+    fn language_totals_group_by_language_and_order_by_volume() {
+        let store = Store::open(Path::new(":memory:")).unwrap();
+        let before = store.language_totals().unwrap();
+        let base = |id: &str| {
+            before
+                .iter()
+                .find(|(key, _)| key == id)
+                .map(|(_, count)| *count)
+                .unwrap_or(0)
+        };
+        let entries = vec![
+            counted_entry("A", "refran", "es"),
+            counted_entry("B", "refran", "es"),
+            counted_entry("C", "refran", "en"),
+        ];
+        store.insert(&entries).unwrap();
+
+        let totals = store.language_totals().unwrap();
+        assert_eq!(totals.first().map(|(id, _)| id.as_str()), Some("es"));
+        assert_eq!(
+            totals.first().map(|(_, count)| *count),
+            Some(base("es") + 2)
+        );
+        assert_eq!(
+            totals
+                .iter()
+                .find(|(id, _)| id == "en")
+                .map(|(_, count)| *count),
+            Some(base("en") + 1)
+        );
+    }
+
+    #[test]
+    fn totals_include_the_seeded_catalog() {
+        let store = Store::open(Path::new(":memory:")).unwrap();
+        let total: i64 = store
+            .category_totals()
+            .unwrap()
+            .iter()
+            .map(|(_, count)| count)
+            .sum();
+        assert_eq!(total, store.count().unwrap());
+        let languages: i64 = store
+            .language_totals()
+            .unwrap()
+            .iter()
+            .map(|(_, count)| count)
+            .sum();
+        assert_eq!(languages, store.count().unwrap());
+    }
+
     #[test]
     fn virtual_snapshot_replacement_preserves_other_sources_and_updates_timestamp() {
         let mut store = Store::open(Path::new(":memory:")).unwrap();
@@ -970,7 +1126,7 @@ mod tests {
 
     #[test]
     fn publishes_and_clears_refresh_progress_only_for_the_lease_owner() {
-        let mut store = Store::open(Path::new(":memory:")).unwrap();
+        let store = Store::open(Path::new(":memory:")).unwrap();
         assert!(store.refresh_progress().unwrap().is_none());
         assert!(store.try_acquire_refresh_lease(1_000, "worker-a").unwrap());
 
@@ -999,6 +1155,29 @@ mod tests {
         let store = Store::open(Path::new(":memory:")).unwrap();
         store.set_metadata("refresh_progress", "not json").unwrap();
         assert!(store.refresh_progress().unwrap().is_none());
+    }
+
+    #[test]
+    fn records_and_clears_the_last_refresh_error() {
+        let store = Store::open(Path::new(":memory:")).unwrap();
+        assert!(store.refresh_error().unwrap().is_none());
+
+        store.record_refresh_error("network down", 42).unwrap();
+        assert_eq!(
+            store.refresh_error().unwrap(),
+            Some(RefreshError {
+                message: "network down".into(),
+                updated_at: 42,
+            })
+        );
+
+        store.clear_refresh_error().unwrap();
+        assert!(store.refresh_error().unwrap().is_none());
+
+        store
+            .set_metadata("last_refresh_error", "not json")
+            .unwrap();
+        assert!(store.refresh_error().unwrap().is_none());
     }
 
     #[test]

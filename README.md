@@ -132,6 +132,17 @@ phase, a block bar, the percentage and the completed units:
   Actualizando Wayback A ███████████░░░░░░░░░░░░░░░░░  40%  4/10
 ```
 
+Press `u` to request an update at any time, even when the catalog is still
+fresh. The reader acquires the refresh lease and starts a forced worker as a
+separate process, so keys, language changes and navigation keep working while
+Cervantes Virtual and Wayback refresh in sequence. The same progress bar shows
+the current phase; when the worker finishes, the bar disappears. When a source
+refresh stores new data, the reader announces `Catálogo actualizado`. If both
+sources fail, the reader shows the failure message instead. If another worker
+already owns the lease, the reader does not start a duplicate and says
+`Ya hay una actualización en curso`.
+`--offline` disables the manual update with an explicit notice.
+
 | Key | Action |
 | --- | --- |
 | `n`, `Enter`, `Space` | Next random refrán |
@@ -139,6 +150,7 @@ phase, a block bar, the percentage and the completed units:
 | `h`, `←` | Previous language or variant |
 | `c` | Next category |
 | `o` | Open the source in the browser |
+| `u` | Update the catalog in the background |
 | `?` | Show or hide the key map |
 | `q`, `Esc`, `Ctrl-C` | Quit |
 
@@ -259,7 +271,9 @@ refranero open
 ### Inspect the local catalog
 
 `stats` prints the SQLite database path, the total number of entries, and
-counts grouped by source, language, and category.
+counts grouped by source, language, and category. Inside the interactive
+reader, press `s` to open an on-screen breakdown by category and language
+with proportional bars without leaving the session.
 
 ```sh
 refranero stats
@@ -281,6 +295,11 @@ refranero --db ./catalog.sqlite3 stats
 The random command reads local data first. When the interactive reader opens, or
 when the catalog is stale, Refranero schedules a background refresh and does not
 wait for it. Use `--offline` to skip it and use only the local catalog.
+
+Inside the interactive reader, `u` starts a forced update even when both caches
+are fresh. The forced worker reuses the same lease, progress channel and
+two-source sequence as the automatic refresh, so a manual update never blocks
+the interface or competes with a running worker.
 
 The automatic refresh covers two sources on separate cycles:
 

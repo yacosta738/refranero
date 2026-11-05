@@ -21,6 +21,8 @@ pub struct Screen<'a> {
     pub message: Option<String>,
     /// Show the key map instead of the entry.
     pub help: bool,
+    /// Catalog statistics, when the reader shows that screen instead of the entry.
+    pub stats: Option<StatsView>,
     /// Terminal columns.
     pub width: usize,
     /// Terminal rows.
@@ -50,6 +52,17 @@ pub struct ProgressView {
     pub total: usize,
 }
 
+/// Counted rows of the statistics screen.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct StatsView {
+    /// Total number of entries in the catalog.
+    pub total: usize,
+    /// Entries per category, biggest first.
+    pub categories: Vec<(String, usize)>,
+    /// Entries per language, biggest first.
+    pub languages: Vec<(String, usize)>,
+}
+
 /// Compose one frame with exactly `height` lines.
 pub fn compose(screen: &Screen<'_>) -> String {
     let width = screen.width.max(24);
@@ -59,6 +72,8 @@ pub fn compose(screen: &Screen<'_>) -> String {
 
     let mut content = if screen.help {
         help_lines(&theme, width, catalog)
+    } else if let Some(stats) = screen.stats.as_ref() {
+        stats_lines(stats, width, &theme, catalog)
     } else {
         entry_lines(screen)
     };
@@ -85,13 +100,157 @@ pub fn compose(screen: &Screen<'_>) -> String {
     if let Some(progress) = screen.progress.as_ref() {
         frame.push(progress_line(progress, width, &theme));
     }
-    frame.push(footer(
-        width,
-        screen.next_language.as_deref(),
-        &theme,
-        catalog,
-    ));
+    frame.push(if screen.stats.is_some() {
+        stats_footer(width, &theme, catalog)
+    } else {
+        footer(width, screen.next_language.as_deref(), &theme, catalog)
+    });
     frame.join("\n")
+}
+
+/// Footer of the statistics screen: the reader actions do not apply while it is open.
+fn stats_footer(width: usize, theme: &Theme, catalog: Catalog) -> String {
+    let back = catalog.text(Message::StatsBack);
+    let help = catalog.text(Message::FooterHelp);
+    let quit = catalog.text(Message::FooterQuit);
+    let candidates = [
+        format!("{back} · {help} · {quit}"),
+        format!("{back} · {quit}"),
+        "s·q".to_owned(),
+    ];
+    let budget = width.saturating_sub(2);
+    let text = candidates
+        .into_iter()
+        .find(|candidate| display_width(candidate) <= budget)
+        .unwrap_or_else(|| "s·q".to_owned());
+    theme.meta(&format!("  {text}"))
+}
+
+/// Compose the statistics screen: total, breakdown by category and breakdown by language.
+fn stats_lines(stats: &StatsView, width: usize, theme: &Theme, catalog: Catalog) -> Vec<String> {
+    let mut lines = vec![
+        format!("  {}", theme.eyebrow(catalog.text(Message::StatsTitle))),
+        theme.rule(&"─".repeat(width.saturating_sub(4).min(40))),
+        String::new(),
+    ];
+
+    if stats.total == 0 {
+        lines.push(format!(
+            "  {}",
+            theme.meta(catalog.text(Message::StatsEmpty))
+        ));
+        return lines;
+    }
+
+    lines.push(format!(
+        "  {} {}",
+        theme.meta(&format!("{}:", catalog.text(Message::StatsTotal))),
+        theme.quote(&format!(
+            "{} {}",
+            stats.total,
+            catalog.text(Message::StatsEntries)
+        ))
+    ));
+    lines.push(String::new());
+
+    let categories: Vec<(String, usize)> = stats
+        .categories
+        .iter()
+        .map(|(id, count)| (catalog.category(id), *count))
+        .collect();
+    lines.extend(stats_section(
+        catalog.text(Message::StatsByCategory),
+        &categories,
+        stats.total,
+        width,
+        theme,
+    ));
+
+    if !stats.languages.is_empty() {
+        lines.push(String::new());
+        let languages: Vec<(String, usize)> = stats
+            .languages
+            .iter()
+            .map(|(code, count)| (catalog.language_name(code), *count))
+            .collect();
+        lines.extend(stats_section(
+            catalog.text(Message::StatsByLanguage),
+            &languages,
+            stats.total,
+            width,
+            theme,
+        ));
+    }
+
+    lines
+}
+
+/// One titled block of counted rows, each with a proportional bar.
+///
+/// The bar and the percentage share the catalog total as reference, so both answer the same
+/// question: how much of the catalog does this row hold.
+fn stats_section(
+    heading: &str,
+    rows: &[(String, usize)],
+    total: usize,
+    width: usize,
+    theme: &Theme,
+) -> Vec<String> {
+    if rows.is_empty() {
+        return Vec::new();
+    }
+    let mut lines = vec![format!("  {}", theme.eyebrow(heading))];
+
+    let count_width = rows
+        .iter()
+        .map(|(_, count)| count.to_string().len())
+        .max()
+        .unwrap_or(1);
+    let mut label_width = rows
+        .iter()
+        .map(|(label, _)| display_width(label))
+        .max()
+        .unwrap_or(0)
+        .min(18);
+    // The label column shrinks before the row can overflow the terminal.
+    label_width = label_width.min(width.saturating_sub(3 + count_width));
+    let reference = total;
+
+    // A row is the label, the counter, the bar and the percentage. Narrow terminals keep the label
+    // and the counter, and drop the rest.
+    let base = 2 + label_width + 1 + count_width;
+    let remaining = width.saturating_sub(base);
+    let (bar_width, show_percent) = if remaining >= 14 {
+        ((remaining - 8).min(24), true)
+    } else if remaining >= 6 {
+        (0, true)
+    } else {
+        (0, false)
+    };
+
+    for (label, count) in rows {
+        let label = format!("{:<label_width$}", fit(label, label_width));
+        let counter = format!("{count:>count_width$}");
+        let mut line = format!("  {label} {counter}");
+        if bar_width > 0 {
+            let filled = (bar_width * count)
+                .checked_div(reference)
+                .unwrap_or(0)
+                .min(bar_width);
+            let bar = format!(
+                "{}{}",
+                theme.progress(&"█".repeat(filled)),
+                theme.meta(&"░".repeat(bar_width - filled))
+            );
+            line.push_str(&format!("  {bar}"));
+        }
+        if show_percent {
+            let percent = (count * 100).checked_div(reference).unwrap_or(0).min(100);
+            line.push_str(&format!("  {percent:>3}%"));
+        }
+        lines.push(theme.meta(&line));
+    }
+    lines
 }
 
 fn entry_lines(screen: &Screen<'_>) -> Vec<String> {
@@ -135,6 +294,8 @@ fn help_lines(theme: &Theme, width: usize, catalog: Catalog) -> Vec<String> {
         ("h", catalog.text(Message::HelpPreviousShort)),
         ("c", catalog.text(Message::HelpCategoryShort)),
         ("o", catalog.text(Message::HelpOpenShort)),
+        ("u", catalog.text(Message::HelpUpdateShort)),
+        ("s", catalog.text(Message::HelpStatsShort)),
         ("?", catalog.text(Message::HelpCloseShort)),
         ("q", catalog.text(Message::HelpQuitShort)),
     ];
@@ -153,6 +314,8 @@ fn help_lines(theme: &Theme, width: usize, catalog: Catalog) -> Vec<String> {
         ),
         ("c", catalog.text(Message::HelpCategoryLong)),
         ("o", catalog.text(Message::HelpOpenLong)),
+        ("u", catalog.text(Message::HelpUpdateLong)),
+        ("s", catalog.text(Message::HelpStatsLong)),
         ("?", catalog.text(Message::HelpCloseLong)),
         (
             catalog.text(Message::HelpQuitKeys),
@@ -244,46 +407,69 @@ fn clip(text: &str, width: usize) -> String {
     clipped
 }
 
+/// Fit text in a fixed column, padding it with spaces when it is shorter.
+fn fit(text: &str, width: usize) -> String {
+    let text = clip(text, width);
+    format!("{text:<width$}")
+}
+
+/// Build the footer line with the actions that fit the terminal.
+///
+/// Every action has a full label and a short key. The footer prefers the full label and falls
+/// back to the key when the terminal is narrow. The quit hint always stays.
 fn footer(width: usize, next_language: Option<&str>, theme: &Theme, catalog: Catalog) -> String {
     let language = next_language.map_or_else(
         || catalog.text(Message::FooterLanguage).to_owned(),
         |code| format!("{}→{code}", catalog.text(Message::FooterLanguage)),
     );
-    let candidates = [
-        format!(
-            "{} · {} · {language} · {} · {} · {}",
-            catalog.text(Message::FooterNext),
-            catalog.text(Message::FooterOpen),
-            catalog.text(Message::FooterCategory),
-            catalog.text(Message::FooterHelp),
-            catalog.text(Message::FooterQuit)
-        ),
-        format!(
-            "{} · {} · {language} · {} · {}",
-            catalog.text(Message::FooterNext),
-            catalog.text(Message::FooterOpen),
-            catalog.text(Message::FooterHelp),
-            catalog.text(Message::FooterQuit)
-        ),
-        format!(
-            "{} · {} · {} · {}",
-            catalog.text(Message::FooterNext),
-            catalog.text(Message::FooterOpen),
-            catalog.text(Message::FooterLanguage),
-            catalog.text(Message::FooterQuit)
-        ),
-        format!(
-            "{} · {} · l/h · ? · q",
-            catalog.text(Message::FooterNext),
-            catalog.text(Message::FooterOpen)
-        ),
-        "n·o·l/h·?·q".to_owned(),
+
+    // (full label, short key, priority, reading order): a lower priority is dropped first.
+    let actions = [
+        (catalog.text(Message::FooterNext), "n", 0, 0),
+        (catalog.text(Message::FooterOpen), "o", 1, 1),
+        (language.as_str(), "l/h", 2, 2),
+        (catalog.text(Message::FooterCategory), "c", 6, 3),
+        (catalog.text(Message::FooterHelp), "?", 5, 4),
+        (catalog.text(Message::FooterUpdate), "u", 3, 5),
+        (catalog.text(Message::FooterStats), "s", 4, 6),
     ];
+    let quit = catalog.text(Message::FooterQuit);
     let budget = width.saturating_sub(2);
-    let text = candidates
-        .into_iter()
-        .find(|candidate| display_width(candidate) <= budget)
-        .unwrap_or_else(|| "n·o·l/h·?·q".to_owned());
+    let quit_width = display_width(quit);
+
+    let mut ordered = actions.to_vec();
+    ordered.sort_by_key(|(_, _, priority, _)| *priority);
+    let mut chosen: Vec<(&str, usize)> = Vec::new();
+    let mut used = 0;
+    for (full, short, _, order) in ordered {
+        let separator = if chosen.is_empty() { 0 } else { 3 };
+        // The quit hint always fits, so the other actions share what is left.
+        let fits = |label: &str, used: usize| {
+            used + display_width(label) + separator + quit_width + 3 <= budget
+        };
+        let label = if fits(full, used) {
+            full
+        } else if fits(short, used) {
+            short
+        } else {
+            continue;
+        };
+        used += display_width(label) + separator;
+        chosen.push((label, order));
+    }
+    chosen.sort_by_key(|(_, order)| *order);
+
+    let mut text = chosen
+        .iter()
+        .map(|(label, _)| *label)
+        .collect::<Vec<_>>()
+        .join(" · ");
+    text.push_str(&format!(" · {quit}"));
+    let text = if display_width(&text) <= budget {
+        text
+    } else {
+        "n·o·u·s·l/h·?·q".to_owned()
+    };
     theme.meta(&format!("  {text}"))
 }
 
@@ -325,6 +511,7 @@ mod tests {
             languages: Vec::new(),
             languages_label: None,
             progress: None,
+            stats: None,
             color: false,
             links: false,
             language: UiLanguage::Spanish,
@@ -406,6 +593,35 @@ mod tests {
     }
 
     #[test]
+    fn help_lists_the_manual_update_action() {
+        let entry = saying("A quien madruga, Dios le ayuda.");
+        let mut options = screen(&entry, 80, 24);
+        options.help = true;
+        let frame = compose(&options);
+        assert!(frame.contains("Actualizar el catálogo"), "{frame}");
+        assert!(frame.contains('u'), "{frame}");
+    }
+
+    #[test]
+    fn english_help_lists_the_manual_update_action() {
+        let entry = saying("A quien madruga, Dios le ayuda.");
+        let mut options = screen_in(&entry, 80, 24, UiLanguage::English);
+        options.help = true;
+        let frame = compose(&options);
+        assert!(frame.contains("Update the catalog"), "{frame}");
+    }
+
+    #[test]
+    fn footer_advertises_the_manual_update_action() {
+        let entry = saying("A quien madruga, Dios le ayuda.");
+        let frame = compose(&screen(&entry, 80, 24));
+        assert!(frame.contains("u actualizar"), "{frame}");
+
+        let english = compose(&screen_in(&entry, 80, 24, UiLanguage::English));
+        assert!(english.contains("u update"), "{english}");
+    }
+
+    #[test]
     fn progress_bar_fills_with_completion() {
         let entry = saying("A quien madruga, Dios le ayuda.");
         let mut options = screen(&entry, 80, 24);
@@ -477,6 +693,102 @@ mod tests {
     }
 
     #[test]
+    fn the_statistics_screen_shows_the_total_and_the_breakdown() {
+        let entry = saying("A quien madruga, Dios le ayuda.");
+        let mut options = screen(&entry, 80, 24);
+        options.stats = Some(super::StatsView {
+            total: 148,
+            categories: vec![
+                ("refran".to_owned(), 55),
+                ("cita".to_owned(), 50),
+                ("proverbio".to_owned(), 16),
+            ],
+            languages: vec![("es".to_owned(), 144), ("en".to_owned(), 3)],
+        });
+        let frame = compose(&options);
+        assert!(frame.contains("ESTADÍSTICAS"), "{frame}");
+        assert!(frame.contains("148"), "{frame}");
+        assert!(frame.contains("POR CATEGORÍA"), "{frame}");
+        assert!(frame.contains("Refrán"), "{frame}");
+        assert!(frame.contains("Cita literaria"), "{frame}");
+        assert!(frame.contains("POR IDIOMA"), "{frame}");
+        assert!(frame.contains("Español"), "{frame}");
+        assert_fits(&frame, 80);
+        assert_exact_height(&frame, 24);
+    }
+
+    #[test]
+    fn the_statistics_screen_replaces_the_entry() {
+        let entry = saying("A quien madruga, Dios le ayuda.");
+        let mut options = screen(&entry, 80, 24);
+        options.stats = Some(super::StatsView {
+            total: 10,
+            categories: vec![("refran".to_owned(), 10)],
+            languages: vec![("es".to_owned(), 10)],
+        });
+        let frame = compose(&options);
+        assert!(!frame.contains('«'), "{frame}");
+        assert!(frame.contains("s volver"), "{frame}");
+    }
+
+    #[test]
+    fn the_statistics_screen_fits_every_width() {
+        let entry = saying("A quien madruga, Dios le ayuda.");
+        for width in [24, 30, 40, 80] {
+            let mut options = screen(&entry, width, 24);
+            options.stats = Some(super::StatsView {
+                total: 148,
+                categories: vec![
+                    ("refran".to_owned(), 55),
+                    ("cita".to_owned(), 50),
+                    ("adivinanza".to_owned(), 5),
+                ],
+                languages: vec![("es".to_owned(), 144), ("ca".to_owned(), 1)],
+            });
+            let frame = compose(&options);
+            assert_fits(&frame, width);
+            assert_exact_height(&frame, 24);
+            assert!(frame.contains("ESTADÍSTICAS"), "width {width}: {frame}");
+        }
+    }
+
+    #[test]
+    fn an_empty_catalog_says_so() {
+        let entry = saying("A quien madruga, Dios le ayuda.");
+        let mut options = screen(&entry, 80, 24);
+        options.stats = Some(super::StatsView {
+            total: 0,
+            categories: Vec::new(),
+            languages: Vec::new(),
+        });
+        let frame = compose(&options);
+        assert!(frame.contains("El catálogo está vacío"), "{frame}");
+    }
+
+    #[test]
+    fn the_statistics_screen_snapshot() {
+        let entry = saying("A quien madruga, Dios le ayuda.");
+        let mut options = screen(&entry, 80, 24);
+        options.stats = Some(super::StatsView {
+            total: 148,
+            categories: vec![
+                ("refran".to_owned(), 55),
+                ("cita".to_owned(), 50),
+                ("proverbio".to_owned(), 16),
+                ("dicho".to_owned(), 12),
+                ("paremia".to_owned(), 10),
+                ("adivinanza".to_owned(), 5),
+            ],
+            languages: vec![
+                ("es".to_owned(), 144),
+                ("en".to_owned(), 3),
+                ("ca".to_owned(), 1),
+            ],
+        });
+        insta::assert_snapshot!(compose(&options));
+    }
+
+    #[test]
     fn language_strip_is_visible_in_the_frame() {
         let entry = saying("A quien madruga, Dios le ayuda.");
         let mut options = screen(&entry, 80, 24);
@@ -498,6 +810,7 @@ mod tests {
         assert_fits(&frame, 40);
         assert!(!frame.contains("://"), "{frame}");
         assert!(frame.contains("o abrir"), "{frame}");
+        assert!(frame.contains("u · q"), "{frame}");
     }
 
     #[test]
@@ -581,7 +894,7 @@ mod tests {
             assert_exact_height(&frame, 12);
             assert_fits(&frame, width);
             assert!(
-                frame.contains("n·o·l/h·?·q") || frame.contains("n next"),
+                frame.contains("n·o·u·l/h·?·q") || frame.contains("n next"),
                 "{frame}"
             );
         }

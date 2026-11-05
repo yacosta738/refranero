@@ -6,7 +6,6 @@ expression: compose(&options)
 
 
 
-
   SHORTCUTS
   ────────────────────────────────────────
 
@@ -15,10 +14,11 @@ expression: compose(&options)
   h / ←                 Previous language or variant
   c                     Next category
   o                     Open the source
+  u                     Update the catalog now
+  s                     See the catalog statistics
   ?                     Close this help
   q / Esc               Quit
 
 
 
-
-  n next · o open · l/h language · c category · ? help · q quit
+  n next · o open · l/h language · c · ? help · u update · s stats · q quit
