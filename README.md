@@ -123,7 +123,7 @@ updating the catalog in the background while you read. On the first interactive
 refresh, the worker imports all five Cervantes Virtual category pages and
 processes the full A–Z Wayback index. This initial import can take longer than
 later updates. The reader announces
-`Catálogo actualizado` when the new data lands; the entry on screen is not
+`Catalog updated` when the new data lands; the entry on screen is not
 replaced under you. Use `--offline` to skip the refresh entirely. The request
 path is drawn in the
 [reading-flow diagram](docs/diagrams/sequence-reading-flow.html).
@@ -132,25 +132,25 @@ While the worker runs, the reader draws a status bar above the key map with the
 phase, a block bar, the percentage and the completed units:
 
 ```text
-  Actualizando Wayback bootstrap 1/26 (A) ██░░░░░░░░░░  20%  8/40
+  Wayback bootstrap 1/26 (A) root ██░░░░░░░░░░  20%  8/40
 ```
 
-En Wayback, el porcentaje y el contador corresponden a las fichas raíz terminadas
-de la letra actual, no a las letras completadas. La fase identifica la letra y
-su posición en A–Z, también al reanudar. Durante el índice, la fase muestra
-`índice`; durante las solicitudes y las esperas muestra el intento o
-`espera/reintento` con los segundos pendientes. Estos textos siguen el idioma
-de la interfaz (`--ui-lang es` o `--ui-lang en`).
+For Wayback, the percentage and counter show completed root fichas for the
+current letter, not completed letters. The phase shows the letter and its
+position in A–Z, including after a resume. While fetching the index, the phase
+shows `index`; during requests and waits, it shows the attempt or
+`waiting/retry` with the remaining seconds. These labels follow the interface
+language (`--ui-lang es` or `--ui-lang en`).
 
 Press `u` to request an update at any time, even when the catalog is still
 fresh. The reader acquires the refresh lease and starts a forced worker as a
 separate process, so keys, language changes and navigation keep working while
 Cervantes Virtual and Wayback refresh in sequence. The same progress bar shows
 the current phase; when the worker finishes, the bar disappears. When a source
-refresh stores new data, the reader announces `Catálogo actualizado`. If both
+refresh stores new data, the reader announces `Catalog updated`. If both
 sources fail, the reader shows the failure message instead. If another worker
 already owns the lease, the reader does not start a duplicate and says
-`Ya hay una actualización en curso`.
+`An update is already running`.
 `--offline` disables the manual update with an explicit notice.
 
 | Key | Action |
@@ -165,8 +165,8 @@ already owns the lease, the reader does not start a duplicate and says
 | `q`, `Esc`, `Ctrl-C` | Quit |
 
 The reader lists the available language codes under the title and boxes the
-current one. The caption reads `Otros idiomas` when the codes are translations of
-the same entry, and `Idioma` when the entry only exists in one language.
+current one. The caption reads `Other languages` when the codes are translations
+of the same entry, and `Language` when the entry only exists in one language.
 
 `l` and `h` rotate the translations of the entry on screen and never replace it
 with a different refrán. Multilingual variants come from `sync wayback`; the
@@ -245,7 +245,7 @@ Terminal capabilities also change the output:
 
 - Stored text is printed with control characters, terminal escape sequences and
   bidi overrides removed. Stored records are not modified.
-- Interactive terminals show `↗ Consultar fuente` as an OSC 8 hyperlink. The
+- Interactive terminals show `↗ View source` as an OSC 8 hyperlink. The
   reader omits a URL wider than the terminal; `o` opens the source. One-shot and
   redirected outputs with hyperlinks disabled print the full URL on its own line,
   never wrapped, so it stays copyable.
@@ -314,40 +314,39 @@ the interface or competes with a running worker.
 The automatic refresh covers two sources on separate cycles:
 
 - **Cervantes Virtual** (24 hours): replaces the current-portal snapshot.
-- **Wayback**: la primera actualización interactiva en segundo plano (o una
-  actualización forzada) importa las raíces y sus variantes disponibles de A–Z.
-  Guarda cada raíz del índice antes de solicitar su captura; después actualiza
-  su procedencia y guarda cada variante disponible. Un fallo posterior no borra
-  lo guardado. El cursor solo avanza cuando termina la letra sin errores de
-  solicitud; la reanudación repite la letra pendiente sin duplicar registros.
-  Tras la carga inicial, conserva el ciclo de siete días y una letra por
-  ejecución, con el límite de raíces existente. Usa el año actual para elegir
-  la captura más cercana.
+- **Wayback**: the first interactive background refresh (or a forced update)
+  imports available roots and language variants across A–Z. It saves each index
+  root before requesting its capture, then updates its provenance and saves
+  each available variant. A later failure does not discard saved data. The
+  cursor advances only after a letter completes without request errors; a
+  resumed run repeats the pending letter without duplicating records. After the
+  initial import, Wayback keeps its seven-day cycle and processes one letter per
+  run, using the existing root limit. It uses the current year to select the
+  closest capture.
 
-Si no se extraen raíces del índice, solo se acepta como vacío cuando el título
-identifica el Refranero y el contenido incluye un marcador explícito de ausencia
-de resultados, como `No hay paremias`. La navegación de la letra, aunque sea
-correcta, no demuestra que el índice esté vacío. Ante contenido desconocido o
-una página de error, la letra queda pendiente; no se avanza el cursor.
-Esta validación se comprueba con fixtures, no con nuevas capturas remotas.
+When the index contains no extracted roots, Refranero accepts it as empty only
+when the title identifies the Refranero and the page contains an explicit
+no-results marker. Correct letter navigation alone
+does not prove that the index is empty. Unknown content and error pages leave the
+letter pending, without advancing the cursor. Tests validate this behavior with
+fixtures rather than new remote captures.
 
-Las solicitudes Wayback son secuenciales y comparten un cliente y un control de
-espera durante todo el recorrido. Entre solicitudes hay una pausa mínima de
-1,2 segundos. HTTP 429, 408, 5xx y errores de conexión o timeout pueden provocar
-hasta tres intentos por solicitud. `Retry-After` admite segundos o una fecha
-HTTP; sin un valor válido, las esperas de reintento son de 2 y 4 segundos.
-El presupuesto acumulado de espera es de 120 segundos por solicitud. Si una
-espera lo supera, la letra se interrumpe con un error explícito: no se recorta
-`Retry-After` ni se continúa con las demás fichas. Las redirecciones también
-pasan por este control, con un máximo de cinco saltos y destinos HTTPS de
-Archive.org. Cada solicitud tiene un timeout de 5 segundos en el worker
-(20 segundos en `sync`).
+Wayback requests are sequential and share one client and pacing policy across
+the entire run. The minimum delay between requests is 1.2 seconds. HTTP 429,
+408, 5xx, connection errors, and timeouts can trigger up to three attempts per
+request. `Retry-After` accepts either a number of seconds or an HTTP date. If
+that header is missing or invalid, retry waits are 2 and 4 seconds. The
+cumulative wait budget is 120 seconds per request. If a requested wait exceeds
+that budget, the letter stops with an explicit error. Refranero does not shorten
+`Retry-After` or continue with other fichas. Redirects use the same policy, with
+a maximum of five hops and HTTPS destinations on Archive.org. Each request has
+a five-second timeout in the worker and a 20-second timeout in `sync`.
 
-Durante las esperas, el worker renueva el lease y publica actividad al menos una
-vez por segundo. Si falla una escritura o pierde el lease, no envía la siguiente
-solicitud. Los errores de lectura o validación del cuerpo también interrumpen
-la letra; no se reintenta automáticamente la descarga del cuerpo. Los avisos de
-parseo de variantes no impiden guardar las demás variantes válidas.
+During waits, the worker renews its lease and publishes activity at least once
+per second. If a database write fails or the worker loses its lease, it sends no
+next request. Body read and validation errors also stop the letter; Refranero
+does not automatically retry body downloads. Variant parsing warnings do not
+prevent Refranero from saving other valid variants.
 
 The first update can take longer because it processes all 26 letters. Closing
 the reader does not stop a worker that is already running. Harvested records are

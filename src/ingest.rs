@@ -39,7 +39,7 @@ pub fn http_client_with_timeout(timeout: Duration) -> Result<Client> {
     build_http_client(timeout, false)
 }
 
-/// Las redirecciones Wayback pasan por el mismo control de pausas y reintentos.
+/// Route Wayback redirects through the same pacing and retry controller.
 pub fn wayback_client_with_timeout(timeout: Duration) -> Result<Client> {
     build_http_client(timeout, true)
 }
@@ -796,7 +796,7 @@ where
             .and_then(|id| id.strip_prefix("cvc:"))
             .context("missing root Par")?
             .to_owned();
-        // El índice ya proporciona una raíz utilizable. Guardarla no completa el grupo.
+        // The index already provides a usable root. Saving it does not complete the group.
         events(WaybackEvent::Entries(
             std::slice::from_ref(&entry),
             &report.captured_spanish_pars,
@@ -818,7 +818,7 @@ where
             });
             Vec::new()
         };
-        // La raíz queda guardada incluso si falla la primera variante.
+        // Keep the root saved even if the first variant request fails.
         events(WaybackEvent::Entries(
             std::slice::from_ref(&entry),
             &report.captured_spanish_pars,
@@ -977,7 +977,7 @@ mod tests {
                     sent_at.push(now.get());
                     let parsed = Url::parse(url).unwrap();
                     if parsed.query_pairs().any(|(key, value)| key == "url" && value.contains("Par=2")) {
-                        assert_eq!(store.count_source("cvc_wayback").unwrap(), 3, "raíz y variante previas ya persistidas");
+                        assert_eq!(store.count_source("cvc_wayback").unwrap(), 3, "previous root and variant are already persisted");
                         let progress = store.refresh_progress().unwrap().unwrap();
                         assert_eq!((progress.done, progress.total), (1, 2));
                     }
@@ -1125,7 +1125,7 @@ mod tests {
             |url, _, _| {
                 calls += 1;
                 if calls == 2 {
-                    return Err(super::retryable_request_error("variante 429"));
+                    return Err(super::retryable_request_error("variant 429"));
                 }
                 Ok(Some(super::CapturedFicha {
                     html: root_html.into(),
@@ -1141,7 +1141,7 @@ mod tests {
             },
         );
         assert!(result.is_err());
-        assert_eq!(calls, 2, "no solicitar segunda raíz");
+        assert_eq!(calls, 2, "must not request the second root");
         assert_eq!(store.count_source("cvc_wayback").unwrap(), 1);
 
         for fail_on_progress in [false, true] {
@@ -1155,7 +1155,7 @@ mod tests {
                 },
                 &mut |event| {
                     if matches!(event, super::WaybackEvent::Progress { .. }) == fail_on_progress {
-                        anyhow::bail!("error de lease o persistencia");
+                        anyhow::bail!("lease or persistence error");
                     }
                     Ok(())
                 },
@@ -1185,10 +1185,10 @@ mod tests {
                     assert_eq!(
                         store.count_source("cvc_wayback").unwrap(),
                         2,
-                        "primer grupo y raíz del índice siguiente persistidos antes de segunda solicitud"
+                        "first group and next index root are persisted before the second request"
                     );
-                    assert_eq!(done.get(), 1, "progreso real dentro de A");
-                    return Err(super::retryable_request_error("429 agotado"));
+                    assert_eq!(done.get(), 1, "real progress within A");
+                    return Err(super::retryable_request_error("429 retry budget exhausted"));
                 }
                 Ok(None)
             },
@@ -1215,7 +1215,7 @@ mod tests {
         assert_eq!(
             store.count_source("cvc_wayback").unwrap(),
             2,
-            "reanudación idempotente"
+            "resume is idempotent"
         );
     }
 

@@ -262,7 +262,7 @@ impl Catalog {
         label::language(self.language, code)
     }
 
-    /// Fase publicada por el worker, en el idioma de la interfaz lectora.
+    /// Translate the worker phase into the reader's interface language.
     pub fn progress_phase(&self, phase: &str) -> String {
         if !phase.starts_with("Wayback ") || self.language == UiLanguage::English {
             return phase.to_owned();
