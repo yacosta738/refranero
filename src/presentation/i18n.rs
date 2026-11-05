@@ -121,6 +121,26 @@ pub enum Message {
     CurrentCategory,
     /// Notice shown when the browser cannot open the source.
     SourceOpenFailed,
+    /// Title of the statistics screen.
+    StatsTitle,
+    /// Prefix of the total line of the statistics screen.
+    StatsTotal,
+    /// Unit of the total line of the statistics screen.
+    StatsEntries,
+    /// Heading of the category breakdown.
+    StatsByCategory,
+    /// Heading of the language breakdown.
+    StatsByLanguage,
+    /// Empty statistics screen.
+    StatsEmpty,
+    /// Compact help, statistics.
+    HelpStatsShort,
+    /// Long help, statistics.
+    HelpStatsLong,
+    /// Footer, statistics.
+    FooterStats,
+    /// Footer of the statistics screen, back to the entry.
+    StatsBack,
 }
 
 /// Every message of the catalog, so tests can prove that no variant is missing.
@@ -257,6 +277,7 @@ const fn spanish(message: Message) -> &'static str {
         Message::HelpCategoryShort => "categoría",
         Message::HelpOpenShort => "abrir",
         Message::HelpUpdateShort => "actualizar",
+        Message::HelpStatsShort => "estadísticas",
         Message::HelpCloseShort => "cerrar",
         Message::HelpQuitShort => "salir",
         Message::HelpNextLong => "Otro refrán",
@@ -265,6 +286,7 @@ const fn spanish(message: Message) -> &'static str {
         Message::HelpCategoryLong => "Siguiente categoría",
         Message::HelpOpenLong => "Abrir la fuente",
         Message::HelpUpdateLong => "Actualizar el catálogo ahora",
+        Message::HelpStatsLong => "Ver las estadísticas del catálogo",
         Message::HelpCloseLong => "Cerrar esta ayuda",
         Message::HelpQuitLong => "Salir",
         Message::FooterNext => "n otro",
@@ -273,7 +295,15 @@ const fn spanish(message: Message) -> &'static str {
         Message::FooterCategory => "c categoría",
         Message::FooterHelp => "? ayuda",
         Message::FooterUpdate => "u actualizar",
+        Message::FooterStats => "s stats",
         Message::FooterQuit => "q salir",
+        Message::StatsTitle => "ESTADÍSTICAS",
+        Message::StatsTotal => "Total",
+        Message::StatsEntries => "entradas",
+        Message::StatsByCategory => "POR CATEGORÍA",
+        Message::StatsByLanguage => "POR IDIOMA",
+        Message::StatsEmpty => "El catálogo está vacío",
+        Message::StatsBack => "s volver",
         Message::LinkLabel => "Consultar fuente",
         Message::LanguageStripShort => "Idiomas",
         Message::CollectionBrand => "REFRANERO",
@@ -312,6 +342,7 @@ const fn english(message: Message) -> &'static str {
         Message::HelpCategoryShort => "category",
         Message::HelpOpenShort => "open",
         Message::HelpUpdateShort => "update",
+        Message::HelpStatsShort => "stats",
         Message::HelpCloseShort => "close",
         Message::HelpQuitShort => "quit",
         Message::HelpNextLong => "Another saying",
@@ -320,6 +351,7 @@ const fn english(message: Message) -> &'static str {
         Message::HelpCategoryLong => "Next category",
         Message::HelpOpenLong => "Open the source",
         Message::HelpUpdateLong => "Update the catalog now",
+        Message::HelpStatsLong => "See the catalog statistics",
         Message::HelpCloseLong => "Close this help",
         Message::HelpQuitLong => "Quit",
         Message::FooterNext => "n next",
@@ -328,7 +360,15 @@ const fn english(message: Message) -> &'static str {
         Message::FooterCategory => "c category",
         Message::FooterHelp => "? help",
         Message::FooterUpdate => "u update",
+        Message::FooterStats => "s stats",
         Message::FooterQuit => "q quit",
+        Message::StatsTitle => "STATISTICS",
+        Message::StatsTotal => "Total",
+        Message::StatsEntries => "entries",
+        Message::StatsByCategory => "BY CATEGORY",
+        Message::StatsByLanguage => "BY LANGUAGE",
+        Message::StatsEmpty => "The catalog is empty",
+        Message::StatsBack => "s back",
         Message::LinkLabel => "View source",
         Message::LanguageStripShort => "Languages",
         Message::CollectionBrand => "REFRANERO",

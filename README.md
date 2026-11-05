@@ -269,7 +269,9 @@ refranero open
 ### Inspect the local catalog
 
 `stats` prints the SQLite database path, the total number of entries, and
-counts grouped by source, language, and category.
+counts grouped by source, language, and category. Inside the interactive
+reader, press `s` to open an on-screen breakdown by category and language
+with proportional bars without leaving the session.
 
 ```sh
 refranero stats

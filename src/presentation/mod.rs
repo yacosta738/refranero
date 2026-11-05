@@ -14,7 +14,7 @@ mod theme;
 
 pub use i18n::{resolve_ui_language, Catalog, Message, UiLanguage};
 pub use renderer::render;
-pub use screen::{compose, ProgressView, Screen};
+pub use screen::{compose, ProgressView, Screen, StatsView};
 pub use terminal::{detect, ColorMode};
 
 /// Rendering context resolved from the terminal, the environment and CLI flags.

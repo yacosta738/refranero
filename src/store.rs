@@ -576,6 +576,30 @@ impl Store {
         rows.collect::<rusqlite::Result<Vec<_>>>()
             .map_err(Into::into)
     }
+
+    /// Count entries by category, biggest first.
+    ///
+    /// The tie break on the identifier keeps the order stable between calls.
+    pub fn category_totals(&self) -> Result<Vec<(String, i64)>> {
+        self.grouped_counts("category")
+    }
+
+    /// Count entries by language, biggest first.
+    pub fn language_totals(&self) -> Result<Vec<(String, i64)>> {
+        self.grouped_counts("language")
+    }
+
+    fn grouped_counts(&self, column: &str) -> Result<Vec<(String, i64)>> {
+        // The column comes from the code, never from user input.
+        let sql = format!(
+            "SELECT {column}, COUNT(*) FROM sayings GROUP BY {column}
+             ORDER BY COUNT(*) DESC, {column} ASC"
+        );
+        let mut stmt = self.connection.prepare(&sql)?;
+        let rows = stmt.query_map([], |r| Ok((r.get(0)?, r.get(1)?)))?;
+        rows.collect::<rusqlite::Result<Vec<_>>>()
+            .map_err(Into::into)
+    }
 }
 
 fn read_saying(row: &rusqlite::Row<'_>) -> rusqlite::Result<Saying> {
@@ -597,6 +621,101 @@ fn read_saying(row: &rusqlite::Row<'_>) -> rusqlite::Result<Saying> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn counted_entry(text: &str, category: &str, language: &str) -> NewSaying {
+        NewSaying {
+            text: text.to_owned(),
+            category: category.to_owned(),
+            language: language.to_owned(),
+            source: "manual".to_owned(),
+            source_url: "https://cvc.cervantes.es/lengua/refranero/ficha.aspx?Par=1&Lng=1"
+                .to_owned(),
+            original_url: None,
+            captured_at: None,
+            group_id: None,
+        }
+    }
+
+    #[test]
+    fn category_totals_group_by_category_and_order_by_volume() {
+        let store = Store::open(Path::new(":memory:")).unwrap();
+        let before = store.category_totals().unwrap();
+        let base = |id: &str| {
+            before
+                .iter()
+                .find(|(key, _)| key == id)
+                .map(|(_, count)| *count)
+                .unwrap_or(0)
+        };
+        let entries = vec![
+            counted_entry("A", "refran", "es"),
+            counted_entry("B", "refran", "es"),
+            counted_entry("C", "refran", "es"),
+            counted_entry("D", "cita", "es"),
+        ];
+        store.insert(&entries).unwrap();
+
+        let totals = store.category_totals().unwrap();
+        let refranes = totals.iter().find(|(id, _)| id == "refran").unwrap();
+        let citas = totals.iter().find(|(id, _)| id == "cita").unwrap();
+        assert_eq!(refranes.1, base("refran") + 3);
+        assert_eq!(citas.1, base("cita") + 1);
+        // The biggest category comes first.
+        assert_eq!(totals.first().map(|(id, _)| id.as_str()), Some("refran"));
+    }
+
+    #[test]
+    fn language_totals_group_by_language_and_order_by_volume() {
+        let store = Store::open(Path::new(":memory:")).unwrap();
+        let before = store.language_totals().unwrap();
+        let base = |id: &str| {
+            before
+                .iter()
+                .find(|(key, _)| key == id)
+                .map(|(_, count)| *count)
+                .unwrap_or(0)
+        };
+        let entries = vec![
+            counted_entry("A", "refran", "es"),
+            counted_entry("B", "refran", "es"),
+            counted_entry("C", "refran", "en"),
+        ];
+        store.insert(&entries).unwrap();
+
+        let totals = store.language_totals().unwrap();
+        assert_eq!(totals.first().map(|(id, _)| id.as_str()), Some("es"));
+        assert_eq!(
+            totals.first().map(|(_, count)| *count),
+            Some(base("es") + 2)
+        );
+        assert_eq!(
+            totals
+                .iter()
+                .find(|(id, _)| id == "en")
+                .map(|(_, count)| *count),
+            Some(base("en") + 1)
+        );
+    }
+
+    #[test]
+    fn totals_include_the_seeded_catalog() {
+        let store = Store::open(Path::new(":memory:")).unwrap();
+        let total: i64 = store
+            .category_totals()
+            .unwrap()
+            .iter()
+            .map(|(_, count)| count)
+            .sum();
+        assert_eq!(total, store.count().unwrap());
+        let languages: i64 = store
+            .language_totals()
+            .unwrap()
+            .iter()
+            .map(|(_, count)| count)
+            .sum();
+        assert_eq!(languages, store.count().unwrap());
+    }
+
     #[test]
     fn virtual_snapshot_replacement_preserves_other_sources_and_updates_timestamp() {
         let mut store = Store::open(Path::new(":memory:")).unwrap();

@@ -15,7 +15,7 @@ use crossterm::{execute, queue};
 
 use crate::domain::{Category, Saying};
 use crate::presentation::{
-    self, compose, Catalog, ColorMode, Message, ProgressView, Screen, UiLanguage,
+    self, compose, Catalog, ColorMode, Message, ProgressView, Screen, StatsView, UiLanguage,
 };
 use crate::store::Store;
 
@@ -55,6 +55,7 @@ pub struct Session<'a> {
     variant_index: usize,
     message: Option<String>,
     help: bool,
+    stats: Option<StatsView>,
     observed_refresh: Option<i64>,
     observed_wayback: Option<i64>,
     observed_refresh_error: Option<i64>,
@@ -106,6 +107,7 @@ impl<'a> Session<'a> {
             variant_index: 0,
             message: None,
             help: false,
+            stats: None,
             observed_refresh,
             observed_wayback,
             observed_refresh_error,
@@ -170,10 +172,20 @@ impl<'a> Session<'a> {
             KeyCode::Char('q') | KeyCode::Esc => return Ok(false),
             KeyCode::Char('?') => {
                 self.help = !self.help;
+                self.stats = None;
+                return Ok(true);
+            }
+            KeyCode::Char('s') if !self.help => {
+                self.toggle_stats()?;
                 return Ok(true);
             }
             _ if self.help => {
                 self.help = false;
+                return Ok(true);
+            }
+            _ if self.stats.is_some() => {
+                // The statistics screen is modal: any other key returns to the entry.
+                self.stats = None;
                 return Ok(true);
             }
             KeyCode::Char('n') | KeyCode::Enter | KeyCode::Char(' ') => self.next_saying()?,
@@ -185,6 +197,37 @@ impl<'a> Session<'a> {
             _ => {}
         }
         Ok(true)
+    }
+
+    /// Open or close the statistics screen.
+    fn toggle_stats(&mut self) -> Result<()> {
+        if self.stats.is_some() {
+            self.stats = None;
+            self.dirty = true;
+            return Ok(());
+        }
+        self.stats = Some(self.read_stats()?);
+        self.dirty = true;
+        Ok(())
+    }
+
+    /// Read the catalog totals for the statistics screen.
+    fn read_stats(&self) -> Result<StatsView> {
+        Ok(StatsView {
+            total: self.store.count()? as usize,
+            categories: self
+                .store
+                .category_totals()?
+                .into_iter()
+                .map(|(id, count)| (id, count as usize))
+                .collect(),
+            languages: self
+                .store
+                .language_totals()?
+                .into_iter()
+                .map(|(code, count)| (code, count as usize))
+                .collect(),
+        })
     }
 
     fn draw(&self, stdout: &mut io::Stdout, width: u16, height: u16) -> Result<()> {
@@ -199,6 +242,7 @@ impl<'a> Session<'a> {
             languages,
             languages_label,
             progress: self.progress.clone(),
+            stats: self.stats.clone(),
             color: self.color,
             links: self.links,
             language: self.catalog.language(),
@@ -280,6 +324,12 @@ impl<'a> Session<'a> {
         }
         self.observed_refresh = virtual_latest;
         self.observed_wayback = wayback_latest;
+        if self.stats.is_some() {
+            // The catalog grew under the open statistics screen: show the new numbers.
+            if let Ok(stats) = self.read_stats() {
+                self.stats = Some(stats);
+            }
+        }
         if self.progress.is_some() {
             // Wait for the full update run (including subsequent phases) before announcing completion.
             self.pending_update_notice = true;
@@ -539,6 +589,117 @@ mod tests {
             Session::start(&store, "es", None, ColorMode::Never, UiLanguage::Spanish).unwrap();
         assert_eq!(session.current.entry.language, "es");
         assert_eq!(session.category.as_deref(), Some("refran"));
+    }
+
+    #[test]
+    fn the_statistics_screen_opens_and_closes_with_the_same_key() {
+        let store = store();
+        let saying = store
+            .random("es", Some("refran"), 1)
+            .unwrap()
+            .into_iter()
+            .next()
+            .unwrap();
+        let mut session = Session::with_current(
+            &store,
+            saying,
+            Some("refran".to_owned()),
+            ColorMode::Never,
+            UiLanguage::Spanish,
+        )
+        .unwrap();
+        assert!(session.stats.is_none());
+
+        session
+            .handle(KeyCode::Char('s'), KeyModifiers::NONE)
+            .unwrap();
+        let stats = session.stats.as_ref().expect("statistics screen");
+        assert_eq!(stats.total, store.count().unwrap() as usize);
+        assert!(!stats.categories.is_empty());
+        assert!(!stats.languages.is_empty());
+        // The totals add up to the catalog size.
+        let sum: usize = stats.categories.iter().map(|(_, count)| count).sum();
+        assert_eq!(sum, stats.total);
+
+        session
+            .handle(KeyCode::Char('s'), KeyModifiers::NONE)
+            .unwrap();
+        assert!(session.stats.is_none());
+    }
+
+    #[test]
+    fn any_other_key_leaves_the_statistics_screen() {
+        let store = store();
+        let saying = store
+            .random("es", Some("refran"), 1)
+            .unwrap()
+            .into_iter()
+            .next()
+            .unwrap();
+        let mut session = Session::with_current(
+            &store,
+            saying,
+            Some("refran".to_owned()),
+            ColorMode::Never,
+            UiLanguage::Spanish,
+        )
+        .unwrap();
+
+        session
+            .handle(KeyCode::Char('s'), KeyModifiers::NONE)
+            .unwrap();
+        assert!(session.stats.is_some());
+
+        // The key is consumed: it closes the screen without changing the entry.
+        let current = session.current.entry.text.clone();
+        session
+            .handle(KeyCode::Char('n'), KeyModifiers::NONE)
+            .unwrap();
+        assert!(session.stats.is_none());
+        assert_eq!(session.current.entry.text, current);
+    }
+
+    #[test]
+    fn the_statistics_screen_refreshes_after_a_background_update() {
+        let store = store();
+        let saying = store
+            .random("es", Some("refran"), 1)
+            .unwrap()
+            .into_iter()
+            .next()
+            .unwrap();
+        let mut session = Session::with_current(
+            &store,
+            saying,
+            Some("refran".to_owned()),
+            ColorMode::Never,
+            UiLanguage::Spanish,
+        )
+        .unwrap();
+
+        session
+            .handle(KeyCode::Char('s'), KeyModifiers::NONE)
+            .unwrap();
+        let before = session.stats.as_ref().unwrap().total;
+
+        store
+            .insert(&[crate::domain::NewSaying {
+                text: "Entrada nueva para las estadísticas".to_owned(),
+                category: "cita".to_owned(),
+                language: "es".to_owned(),
+                source: "manual".to_owned(),
+                source_url: "https://cvc.cervantes.es/lengua/refranero/ficha.aspx?Par=1&Lng=1"
+                    .to_owned(),
+                original_url: None,
+                captured_at: None,
+                group_id: None,
+            }])
+            .unwrap();
+        store.record_successful_refresh(1_700_000_000).unwrap();
+
+        session.poll_refresh();
+        let after = session.stats.as_ref().expect("statistics screen").total;
+        assert_eq!(after, before + 1);
     }
 
     #[test]

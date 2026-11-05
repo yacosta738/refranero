@@ -15,10 +15,10 @@ expression: compose(&options)
   c                     Siguiente categoría
   o                     Abrir la fuente
   u                     Actualizar el catálogo ahora
+  s                     Ver las estadísticas del catálogo
   ?                     Cerrar esta ayuda
   q / Esc               Salir
 
 
 
-
-  n otro · o abrir · l/h idioma · c categoría · ? ayuda · u actualizar · q salir
+  n otro · o abrir · l/h idioma · c · ? ayuda · u actualizar · s stats · q salir
