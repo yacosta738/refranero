@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.7.1](https://github.com/yacosta738/refranero/compare/v0.7.0...v0.7.1) (2026-11-06)
+
+
+### Bug Fixes
+
+* **stats:** round percentages and update README docs ([#51](https://github.com/yacosta738/refranero/issues/51)) ([67009ea](https://github.com/yacosta738/refranero/commit/67009ea1541953ae3c9bab4b1d6ea7de18c0f1c8))
+
 ## [0.7.0](https://github.com/yacosta738/refranero/compare/v0.6.1...v0.7.0) (2026-11-06)
 
 
