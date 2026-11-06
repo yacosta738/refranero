@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.7.2](https://github.com/yacosta738/refranero/compare/v0.7.1...v0.7.2) (2026-11-06)
+
+
+### Bug Fixes
+
+* **wayback:** coordinate request pacing ([#53](https://github.com/yacosta738/refranero/issues/53)) ([e55e95c](https://github.com/yacosta738/refranero/commit/e55e95c411c292d8158ba7b10f944e69681e3fb4))
+
 ## [0.7.1](https://github.com/yacosta738/refranero/compare/v0.7.0...v0.7.1) (2026-11-06)
 
 
