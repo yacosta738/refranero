@@ -297,7 +297,7 @@ impl<'a> Session<'a> {
                 label: format!(
                     "{} {}",
                     self.catalog.text(Message::ProgressUpdating),
-                    progress.phase
+                    self.catalog.progress_phase(&progress.phase)
                 ),
                 done: progress.done,
                 total: progress.total,
