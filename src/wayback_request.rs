@@ -11,6 +11,20 @@ const MAX_ATTEMPTS: usize = 3;
 pub trait Clock {
     fn now(&self) -> Duration;
     fn wait(&mut self, duration: Duration);
+
+    fn unix_now(&self) -> i64 {
+        SystemTime::now()
+            .duration_since(SystemTime::UNIX_EPOCH)
+            .map(|duration| i64::try_from(duration.as_secs()).unwrap_or(i64::MAX))
+            .unwrap_or_default()
+    }
+}
+
+/// Persistence boundary for an absolute Wayback retry deadline.
+pub trait RetryDeadlinePersistence {
+    fn load_deadline(&mut self, now: i64) -> Result<Option<i64>>;
+    fn save_deadline(&mut self, deadline: i64, now: i64) -> Result<()>;
+    fn clear_if_due(&mut self, now: i64) -> Result<()>;
 }
 
 pub struct RealClock(Instant);
@@ -40,6 +54,7 @@ enum Redirect<T> {
 pub struct WaybackRequests<C = RealClock> {
     clock: C,
     last_request: Option<Duration>,
+    retry_deadline: Option<Box<dyn RetryDeadlinePersistence>>,
 }
 
 impl WaybackRequests {
@@ -47,6 +62,7 @@ impl WaybackRequests {
         Self {
             clock: RealClock(Instant::now()),
             last_request: None,
+            retry_deadline: None,
         }
     }
 
@@ -66,7 +82,16 @@ impl<C: Clock> WaybackRequests<C> {
         Self {
             clock,
             last_request: None,
+            retry_deadline: None,
         }
+    }
+
+    pub fn with_retry_deadline_persistence(
+        mut self,
+        persistence: Box<dyn RetryDeadlinePersistence>,
+    ) -> Self {
+        self.retry_deadline = Some(persistence);
+        self
     }
 
     pub fn get_with(
@@ -75,6 +100,7 @@ impl<C: Clock> WaybackRequests<C> {
         mut send: impl FnMut(&str) -> reqwest::Result<Response>,
         activity: &mut (impl FnMut(&str) -> Result<()> + ?Sized),
     ) -> Result<Response> {
+        let wall_now = self.clock.unix_now();
         self.follow(
             url,
             |url| match send(url) {
@@ -88,7 +114,7 @@ impl<C: Clock> WaybackRequests<C> {
                             .headers()
                             .get(reqwest::header::RETRY_AFTER)
                             .and_then(|value| value.to_str().ok())
-                            .and_then(|value| retry_after(value, SystemTime::now()));
+                            .and_then(|value| retry_after_unix(value, wall_now));
                         Ok(Attempt::Retry {
                             after,
                             reason: format!("HTTP {status}"),
@@ -118,17 +144,27 @@ impl<C: Clock> WaybackRequests<C> {
     }
 }
 
+#[cfg(test)]
 fn retry_after(value: &str, now: SystemTime) -> Option<Duration> {
-    value
-        .trim()
-        .parse::<u64>()
-        .map(Duration::from_secs)
-        .ok()
-        .or_else(|| {
-            httpdate::parse_http_date(value)
-                .ok()
-                .map(|date| date.duration_since(now).unwrap_or_default())
-        })
+    let now = now
+        .duration_since(SystemTime::UNIX_EPOCH)
+        .map(|duration| i64::try_from(duration.as_secs()).unwrap_or(i64::MAX))
+        .unwrap_or_default();
+    retry_after_unix(value, now)
+}
+
+fn retry_after_unix(value: &str, now: i64) -> Option<Duration> {
+    if let Ok(seconds) = value.trim().parse::<u64>() {
+        return Some(Duration::from_secs(seconds));
+    }
+    let date = httpdate::parse_http_date(value).ok()?;
+    let deadline = date
+        .duration_since(SystemTime::UNIX_EPOCH)
+        .map(|duration| i64::try_from(duration.as_secs()).unwrap_or(i64::MAX))
+        .unwrap_or_default();
+    Some(Duration::from_secs(
+        deadline.saturating_sub(now).max(0) as u64
+    ))
 }
 
 impl<C: Clock> WaybackRequests<C> {
@@ -166,6 +202,7 @@ impl<C: Clock> WaybackRequests<C> {
         mut send: impl FnMut() -> Result<Attempt<T>>,
         activity: &mut (impl FnMut(&str) -> Result<()> + ?Sized),
     ) -> Result<T> {
+        self.wait_for_persisted_deadline(activity)?;
         let mut delay = Duration::ZERO;
         let mut waited = Duration::ZERO;
         for attempt in 1..=MAX_ATTEMPTS {
@@ -189,20 +226,70 @@ impl<C: Clock> WaybackRequests<C> {
             match response? {
                 Attempt::Ready(value) => return Ok(value),
                 Attempt::Retry { after, reason } => {
-                    if attempt == MAX_ATTEMPTS {
-                        bail!("Wayback retries exhausted ({reason}); letter interrupted");
+                    if let Some(after) = after {
+                        let now = self.clock.unix_now();
+                        let seconds = i64::try_from(after.as_secs()).unwrap_or(i64::MAX);
+                        let deadline = now.saturating_add(seconds);
+                        // Save every server-provided deadline before waiting or returning. A
+                        // process can stop during an otherwise in-budget wait, and the final
+                        // attempt can also receive a Retry-After before it exhausts retries.
+                        self.persist_retry_deadline(deadline)?;
+                        if after.max(MIN_PAUSE) > WAIT_BUDGET.saturating_sub(waited) {
+                            bail!("Wayback wait budget exceeded; letter interrupted without retrying before Retry-After");
+                        }
+                        if attempt == MAX_ATTEMPTS {
+                            bail!("Wayback retries exhausted ({reason}); letter interrupted");
+                        }
+                        delay = after;
+                    } else {
+                        if attempt == MAX_ATTEMPTS {
+                            bail!("Wayback retries exhausted ({reason}); letter interrupted");
+                        }
+                        delay = Duration::from_secs(2_u64.pow(attempt as u32));
                     }
-                    delay = after.unwrap_or_else(|| Duration::from_secs(2_u64.pow(attempt as u32)));
                 }
             }
         }
         unreachable!("every final attempt returns")
+    }
+
+    fn persist_retry_deadline(&mut self, deadline: i64) -> Result<()> {
+        if let Some(persistence) = self.retry_deadline.as_mut() {
+            persistence.save_deadline(deadline, self.clock.unix_now())?;
+        }
+        Ok(())
+    }
+
+    fn wait_for_persisted_deadline(
+        &mut self,
+        activity: &mut (impl FnMut(&str) -> Result<()> + ?Sized),
+    ) -> Result<()> {
+        let Some(persistence) = self.retry_deadline.as_mut() else {
+            return Ok(());
+        };
+        loop {
+            let now = self.clock.unix_now();
+            let Some(deadline) = persistence.load_deadline(now)? else {
+                return Ok(());
+            };
+            if deadline <= now {
+                activity("retry deadline due")?;
+                persistence.clear_if_due(self.clock.unix_now())?;
+                // A same-owner update may have moved the deadline while it became due.
+                continue;
+            }
+            let remaining = deadline.saturating_sub(now);
+            activity(&format!("waiting/retry {}s", remaining.max(1)))?;
+            self.clock
+                .wait(Duration::from_secs(1).min(Duration::from_secs(remaining as u64)));
+        }
     }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+    use rusqlite::OptionalExtension;
     use std::cell::Cell;
     use std::rc::Rc;
 
@@ -216,12 +303,38 @@ mod tests {
         }
     }
 
+    #[derive(Clone)]
+    struct FakeWallClock {
+        monotonic: Rc<Cell<Duration>>,
+        unix: Rc<Cell<i64>>,
+    }
+
+    impl Clock for FakeWallClock {
+        fn now(&self) -> Duration {
+            self.monotonic.get()
+        }
+
+        fn wait(&mut self, duration: Duration) {
+            self.monotonic.set(self.monotonic.get() + duration);
+            self.unix.set(
+                self.unix
+                    .get()
+                    .saturating_add(i64::try_from(duration.as_secs()).unwrap_or(i64::MAX)),
+            );
+        }
+
+        fn unix_now(&self) -> i64 {
+            self.unix.get()
+        }
+    }
+
     #[test]
     fn redirects_share_pacing_and_have_a_finite_limit() {
         let now = Rc::new(Cell::new(Duration::ZERO));
         let mut requests = WaybackRequests {
             clock: FakeClock(now.clone()),
             last_request: None,
+            retry_deadline: None,
         };
         let mut calls = Vec::new();
         requests
@@ -276,6 +389,7 @@ mod tests {
         let mut requests = WaybackRequests {
             clock: FakeClock(now),
             last_request: None,
+            retry_deadline: None,
         };
         let mut calls = 0;
         let result: Result<()> = requests.run(
@@ -302,6 +416,7 @@ mod tests {
         let mut requests = WaybackRequests {
             clock: FakeClock(now.clone()),
             last_request: None,
+            retry_deadline: None,
         };
         let mut calls = 0;
         let result: Result<()> = requests.run(
@@ -326,6 +441,7 @@ mod tests {
             let mut requests = WaybackRequests {
                 clock: FakeClock(now.clone()),
                 last_request: None,
+                retry_deadline: None,
             };
             let mut calls = 0;
             let result: Result<()> = requests.run(
@@ -357,6 +473,7 @@ mod tests {
         let mut requests = WaybackRequests {
             clock: FakeClock(now.clone()),
             last_request: None,
+            retry_deadline: None,
         };
         let mut calls = 0;
         requests
@@ -398,6 +515,7 @@ mod tests {
         let mut requests = WaybackRequests {
             clock: FakeClock(now.clone()),
             last_request: None,
+            retry_deadline: None,
         };
         let mut times = Vec::new();
         let result: Result<()> = requests.run(
@@ -428,6 +546,7 @@ mod tests {
         let mut requests = WaybackRequests {
             clock: FakeClock(now.clone()),
             last_request: None,
+            retry_deadline: None,
         };
         let mut calls = 0;
         let result: Result<()> = requests.run(
@@ -446,11 +565,277 @@ mod tests {
     }
 
     #[test]
+    fn over_budget_retry_after_is_persisted_before_returning_budget_error() {
+        use reqwest::ResponseBuilderExt;
+        let path = std::env::temp_dir().join(format!(
+            "refranero-retry-deadline-{}.sqlite3",
+            std::process::id()
+        ));
+        for suffix in ["", "-wal", "-shm"] {
+            let _ = std::fs::remove_file(format!("{}{suffix}", path.display()));
+        }
+        let start = 1_700_000_000;
+        let store = crate::store::Store::open(&path).unwrap();
+        assert!(store.try_acquire_refresh_lease(start, "worker").unwrap());
+        let wall = FakeWallClock {
+            monotonic: Rc::new(Cell::new(Duration::ZERO)),
+            unix: Rc::new(Cell::new(start)),
+        };
+        let mut requests = WaybackRequests::with_clock(wall.clone())
+            .with_retry_deadline_persistence(
+                store.wayback_retry_deadline_persistence("worker").unwrap(),
+            );
+        let error = requests
+            .get_with(
+                "https://web.archive.org/test",
+                |url| {
+                    Ok(http::Response::builder()
+                        .status(429)
+                        .header("retry-after", "121")
+                        .url(url::Url::parse(url).unwrap())
+                        .body(String::new())
+                        .unwrap()
+                        .into())
+                },
+                &mut |_| Ok(()),
+            )
+            .unwrap_err();
+        assert!(error.to_string().contains("budget"));
+        assert_eq!(store.wayback_bootstrap_next().unwrap(), Some('A'));
+        let mut other_worker = store
+            .wayback_retry_deadline_persistence("other-worker")
+            .unwrap();
+        assert!(other_worker.clear_if_due(start + 121).is_err());
+        drop(requests);
+        drop(store);
+
+        // A new Store and request controller model a worker restart.
+        let reopened = crate::store::Store::open(&path).unwrap();
+        let connection = rusqlite::Connection::open(&path).unwrap();
+        let deadline: i64 = connection
+            .query_row(
+                "SELECT CAST(value AS INTEGER) FROM metadata WHERE key = 'wayback_retry_deadline'",
+                [],
+                |row| row.get(0),
+            )
+            .unwrap();
+        assert_eq!(deadline, start + 121);
+        drop(connection);
+        let mut resumed = WaybackRequests::with_clock(wall.clone())
+            .with_retry_deadline_persistence(
+                reopened
+                    .wayback_retry_deadline_persistence("worker")
+                    .unwrap(),
+            );
+        let mut send_times = Vec::new();
+        resumed
+            .get_with(
+                "https://web.archive.org/test",
+                |url| {
+                    send_times.push(wall.unix_now());
+                    Ok(http::Response::builder()
+                        .status(200)
+                        .url(url::Url::parse(url).unwrap())
+                        .body(String::new())
+                        .unwrap()
+                        .into())
+                },
+                &mut |activity| {
+                    assert!(reopened.renew_refresh_lease(wall.unix_now(), "worker")?);
+                    reopened.set_refresh_progress(&crate::store::RefreshProgress {
+                        phase: activity.into(),
+                        done: 1,
+                        total: 1,
+                        updated_at: wall.unix_now(),
+                    })?;
+                    Ok(())
+                },
+            )
+            .unwrap();
+        assert_eq!(send_times, vec![deadline]);
+        assert_eq!(wall.unix_now(), deadline);
+        assert_eq!(
+            reopened.refresh_progress().unwrap().unwrap().updated_at,
+            deadline,
+            "the resumed wait publishes progress through the final deadline tick"
+        );
+        let connection = rusqlite::Connection::open(&path).unwrap();
+        let remaining: Option<String> = connection
+            .query_row(
+                "SELECT value FROM metadata WHERE key = 'wayback_retry_deadline'",
+                [],
+                |row| row.get(0),
+            )
+            .optional()
+            .unwrap();
+        assert!(
+            remaining.is_none(),
+            "due deadline is cleared under the active lease"
+        );
+        drop(connection);
+        drop(reopened);
+        for suffix in ["", "-wal", "-shm"] {
+            let _ = std::fs::remove_file(format!("{}{suffix}", path.display()));
+        }
+    }
+
+    #[test]
+    fn in_budget_retry_after_is_persisted_before_wait_and_enforced_after_restart() {
+        use reqwest::ResponseBuilderExt;
+        let path = std::env::temp_dir().join(format!(
+            "refranero-in-budget-retry-deadline-{}.sqlite3",
+            std::process::id()
+        ));
+        for suffix in ["", "-wal", "-shm"] {
+            let _ = std::fs::remove_file(format!("{}{suffix}", path.display()));
+        }
+        let start = 1_700_000_000;
+        let store = crate::store::Store::open(&path).unwrap();
+        assert!(store.try_acquire_refresh_lease(start, "worker").unwrap());
+        let wall = FakeWallClock {
+            monotonic: Rc::new(Cell::new(Duration::ZERO)),
+            unix: Rc::new(Cell::new(start)),
+        };
+        let mut requests = WaybackRequests::with_clock(wall.clone())
+            .with_retry_deadline_persistence(
+                store.wayback_retry_deadline_persistence("worker").unwrap(),
+            );
+        let error = requests
+            .get_with(
+                "https://web.archive.org/test",
+                |url| {
+                    Ok(http::Response::builder()
+                        .status(429)
+                        .header("retry-after", "30")
+                        .url(url::Url::parse(url).unwrap())
+                        .body(String::new())
+                        .unwrap()
+                        .into())
+                },
+                &mut |activity| {
+                    assert!(store.renew_refresh_lease(wall.unix_now(), "worker")?);
+                    if activity.starts_with("waiting/retry") {
+                        bail!("simulated worker interruption");
+                    }
+                    Ok(())
+                },
+            )
+            .unwrap_err();
+        assert!(error.to_string().contains("simulated worker interruption"));
+        drop(requests);
+        drop(store);
+
+        // The next controller must honor the saved deadline before its first request.
+        let reopened = crate::store::Store::open(&path).unwrap();
+        let mut resumed = WaybackRequests::with_clock(wall.clone())
+            .with_retry_deadline_persistence(
+                reopened
+                    .wayback_retry_deadline_persistence("worker")
+                    .unwrap(),
+            );
+        let mut send_times = Vec::new();
+        resumed
+            .get_with(
+                "https://web.archive.org/test",
+                |url| {
+                    send_times.push(wall.unix_now());
+                    Ok(http::Response::builder()
+                        .status(200)
+                        .url(url::Url::parse(url).unwrap())
+                        .body(String::new())
+                        .unwrap()
+                        .into())
+                },
+                &mut |activity| {
+                    assert!(reopened.renew_refresh_lease(wall.unix_now(), "worker")?);
+                    reopened.set_refresh_progress(&crate::store::RefreshProgress {
+                        phase: activity.into(),
+                        done: 1,
+                        total: 1,
+                        updated_at: wall.unix_now(),
+                    })?;
+                    Ok(())
+                },
+            )
+            .unwrap();
+        assert_eq!(send_times, vec![start + 30]);
+        drop(resumed);
+        drop(reopened);
+        for suffix in ["", "-wal", "-shm"] {
+            let _ = std::fs::remove_file(format!("{}{suffix}", path.display()));
+        }
+    }
+
+    #[test]
+    fn final_attempt_retry_after_is_persisted_before_exhausting_retries() {
+        use reqwest::ResponseBuilderExt;
+        let path = std::env::temp_dir().join(format!(
+            "refranero-final-attempt-retry-deadline-{}.sqlite3",
+            std::process::id()
+        ));
+        for suffix in ["", "-wal", "-shm"] {
+            let _ = std::fs::remove_file(format!("{}{suffix}", path.display()));
+        }
+        let store = crate::store::Store::open(&path).unwrap();
+        let start = 1_700_000_000;
+        assert!(store.try_acquire_refresh_lease(start, "worker").unwrap());
+        let wall = FakeWallClock {
+            monotonic: Rc::new(Cell::new(Duration::ZERO)),
+            unix: Rc::new(Cell::new(start)),
+        };
+        let mut requests = WaybackRequests::with_clock(wall.clone())
+            .with_retry_deadline_persistence(
+                store.wayback_retry_deadline_persistence("worker").unwrap(),
+            );
+        let mut calls = 0;
+        let error = requests
+            .get_with(
+                "https://web.archive.org/test",
+                |url| {
+                    calls += 1;
+                    let response = if calls == MAX_ATTEMPTS {
+                        http::Response::builder()
+                            .status(429)
+                            .header("retry-after", "30")
+                    } else {
+                        http::Response::builder().status(503)
+                    };
+                    Ok(response
+                        .url(url::Url::parse(url).unwrap())
+                        .body(String::new())
+                        .unwrap()
+                        .into())
+                },
+                &mut |activity| {
+                    assert!(store.renew_refresh_lease(wall.unix_now(), "worker")?);
+                    let _ = activity;
+                    Ok(())
+                },
+            )
+            .unwrap_err();
+        assert!(error.to_string().contains("retries exhausted"));
+        assert_eq!(calls, MAX_ATTEMPTS);
+        drop(requests);
+
+        let mut persistence = store.wayback_retry_deadline_persistence("worker").unwrap();
+        assert_eq!(
+            persistence.load_deadline(wall.unix_now()).unwrap(),
+            Some(start + 36)
+        );
+        drop(persistence);
+        drop(store);
+        for suffix in ["", "-wal", "-shm"] {
+            let _ = std::fs::remove_file(format!("{}{suffix}", path.display()));
+        }
+    }
+
+    #[test]
     fn retry_after_blocks_requests_and_keeps_activity() {
         let now = Rc::new(Cell::new(Duration::ZERO));
         let mut requests = WaybackRequests {
             clock: FakeClock(now.clone()),
             last_request: None,
+            retry_deadline: None,
         };
         let mut times = Vec::new();
         let mut ticks = 0;
@@ -483,5 +868,104 @@ mod tests {
                 &mut |_| Ok(()),
             )
             .unwrap();
+    }
+
+    #[test]
+    fn resumed_wait_stops_when_the_refresh_lease_is_lost() {
+        use reqwest::ResponseBuilderExt;
+        let path = std::env::temp_dir().join(format!(
+            "refranero-retry-lease-loss-{}.sqlite3",
+            std::process::id()
+        ));
+        let _ = std::fs::remove_file(&path);
+        let start = 1_700_000_000;
+        let store = crate::store::Store::open(&path).unwrap();
+        assert!(store.try_acquire_refresh_lease(start, "worker").unwrap());
+        let mut persistence = store.wayback_retry_deadline_persistence("worker").unwrap();
+        persistence.save_deadline(start + 3, start).unwrap();
+        let wall = FakeWallClock {
+            monotonic: Rc::new(Cell::new(Duration::ZERO)),
+            unix: Rc::new(Cell::new(start)),
+        };
+        let mut requests =
+            WaybackRequests::with_clock(wall.clone()).with_retry_deadline_persistence(persistence);
+        let mut sends = 0;
+        let mut callbacks = 0;
+        let result = requests.get_with(
+            "https://web.archive.org/test",
+            |url| {
+                sends += 1;
+                Ok(http::Response::builder()
+                    .status(200)
+                    .url(url::Url::parse(url).unwrap())
+                    .body(String::new())
+                    .unwrap()
+                    .into())
+            },
+            &mut |_| {
+                callbacks += 1;
+                if callbacks == 1 {
+                    store.release_refresh_lease("worker")?;
+                    return Ok(());
+                }
+                if !store.renew_refresh_lease(wall.unix_now(), "worker")? {
+                    bail!("refresh lease lost during resumed deadline wait");
+                }
+                Ok(())
+            },
+        );
+        assert!(result.unwrap_err().to_string().contains("lease lost"));
+        assert_eq!(sends, 0);
+        assert_eq!(wall.unix_now(), start + 1);
+        drop(requests);
+        drop(store);
+        for suffix in ["", "-wal", "-shm"] {
+            let _ = std::fs::remove_file(format!("{}{suffix}", path.display()));
+        }
+    }
+
+    struct FailingDeadlinePersistence;
+
+    impl RetryDeadlinePersistence for FailingDeadlinePersistence {
+        fn load_deadline(&mut self, _: i64) -> Result<Option<i64>> {
+            Ok(None)
+        }
+        fn save_deadline(&mut self, _: i64, _: i64) -> Result<()> {
+            bail!("deadline persistence failed")
+        }
+        fn clear_if_due(&mut self, _: i64) -> Result<()> {
+            Ok(())
+        }
+    }
+
+    #[test]
+    fn retry_deadline_persistence_failure_is_not_hidden_by_budget_error() {
+        use reqwest::ResponseBuilderExt;
+        let now = Rc::new(Cell::new(Duration::ZERO));
+        let wall = FakeWallClock {
+            monotonic: now,
+            unix: Rc::new(Cell::new(1_700_000_000)),
+        };
+        let mut requests = WaybackRequests::with_clock(wall)
+            .with_retry_deadline_persistence(Box::new(FailingDeadlinePersistence));
+        let mut calls = 0;
+        let error = requests
+            .get_with(
+                "https://web.archive.org/test",
+                |url| {
+                    calls += 1;
+                    Ok(http::Response::builder()
+                        .status(429)
+                        .header("retry-after", "121")
+                        .url(url::Url::parse(url).unwrap())
+                        .body(String::new())
+                        .unwrap()
+                        .into())
+                },
+                &mut |_| Ok(()),
+            )
+            .unwrap_err();
+        assert!(error.to_string().contains("deadline persistence failed"));
+        assert_eq!(calls, 1, "persistence failure must stop before a retry");
     }
 }

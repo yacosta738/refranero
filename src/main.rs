@@ -355,6 +355,17 @@ fn publish_progress(store: &Store, phase: &str, done: usize, total: usize) {
 }
 
 fn refresh_virtual(store: &mut Store, owner: &str) -> Result<()> {
+    refresh_virtual_with_fetch(store, owner, |category| {
+        let client = ingest::http_client_with_timeout(std::time::Duration::from_secs(5))?;
+        ingest::import_virtual(&client, category, usize::MAX)
+    })
+}
+
+fn refresh_virtual_with_fetch(
+    store: &mut Store,
+    owner: &str,
+    mut fetch: impl FnMut(Category) -> Result<Vec<domain::NewSaying>>,
+) -> Result<()> {
     let categories = Category::all();
     let total = categories.len();
     let mut snapshot = Vec::new();
@@ -366,9 +377,8 @@ fn refresh_virtual(store: &mut Store, owner: &str) -> Result<()> {
             );
         }
         publish_progress(store, "Cervantes Virtual", index, total);
-        let client = ingest::http_client_with_timeout(std::time::Duration::from_secs(5))?;
         // Automatic refreshes are full snapshots. Explicit `sync` keeps its user-selected limit.
-        let entries = ingest::import_virtual(&client, category, usize::MAX)?;
+        let entries = fetch(category)?;
         if entries.is_empty() {
             bail!(
                 "no entries parsed from portal category {}; keeping cached catalog",
@@ -386,7 +396,12 @@ fn refresh_virtual(store: &mut Store, owner: &str) -> Result<()> {
 
 fn refresh_wayback(store: &mut Store, owner: &str) -> Result<()> {
     let client = ingest::wayback_client_with_timeout(std::time::Duration::from_secs(5))?;
-    let mut requests = wayback_request::WaybackRequests::new();
+    let requests = wayback_request::WaybackRequests::new();
+    let mut requests = if let Some(persistence) = store.wayback_retry_deadline_persistence(owner) {
+        requests.with_retry_deadline_persistence(persistence)
+    } else {
+        requests
+    };
     update::run_wayback_updates(
         store,
         |store, letter, bootstrap, _position| {
@@ -636,5 +651,48 @@ mod wayback_progress_tests {
         let progress = store.refresh_progress().unwrap().unwrap();
         assert_eq!((progress.done, progress.total), (1, 50));
         assert!(progress.phase.contains("1/26 (A)"));
+    }
+
+    #[test]
+    fn automatic_virtual_refresh_imports_and_persists_every_fixture_record_over_fifty() {
+        let mut store = Store::open(Path::new(":memory:")).unwrap();
+        assert!(store
+            .try_acquire_refresh_lease(unix_timestamp(), "fixture")
+            .unwrap());
+        let mut imported = 0;
+        refresh_virtual_with_fetch(&mut store, "fixture", |category| {
+            let count = if category == Category::Refran { 55 } else { 1 };
+            let html = (0..count)
+                .map(|index| {
+                    format!(
+                        "<blockquote>Fixture {} {index}</blockquote>",
+                        category.as_str()
+                    )
+                })
+                .collect::<String>();
+            let entries = ingest::import_virtual_with_fetch(category, usize::MAX, |_| Ok(html))?;
+            imported += entries.len();
+            Ok(entries)
+        })
+        .unwrap();
+
+        assert!(imported > 50);
+        assert_eq!(
+            store.count_source("cervantes_virtual").unwrap(),
+            imported as i64
+        );
+        let refranes = store.random("es", Some("refran"), 100).unwrap();
+        assert_eq!(
+            refranes
+                .iter()
+                .filter(|entry| entry.entry.text.starts_with("Fixture refran "))
+                .count(),
+            55
+        );
+        assert!(refranes
+            .iter()
+            .any(|entry| entry.entry.text == "Fixture refran 54"));
+        assert!(store.last_successful_refresh().unwrap().is_some());
+        assert!(store.catalog_generation().unwrap() > 0);
     }
 }
