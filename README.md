@@ -302,9 +302,11 @@ refranero --db ./catalog.sqlite3 stats
 
 ## Import and refresh data
 
-The random command reads local data first. When the catalog is stale, Refranero
-schedules a background refresh and does not wait for it. Use `--offline` to skip
-it and use only the local catalog.
+Both random modes read local data. Interactive startup checks refresh policy and
+the lease, and may start a background worker before it reads and displays the
+first entry. A non-interactive one-shot prints its entry first, then may schedule
+eligible background work. Use `--offline` to skip that work and use only the
+local catalog.
 
 Inside the interactive reader, `u` starts a forced update even when both caches
 are fresh. The forced worker reuses the same lease, progress channel and
@@ -319,10 +321,10 @@ The automatic refresh covers two sources on separate cycles:
   root before requesting its capture, then updates its provenance and saves
   each available variant. A later failure does not discard saved data. The
   cursor advances only after a letter completes without request errors; a
-  resumed run repeats the pending letter without duplicating records. After the
-  initial import, Wayback keeps its seven-day cycle and processes one letter per
-  run, using the existing root limit. It uses the current year to select the
-  closest capture.
+  resumed bootstrap processes all remaining letters through Z in that run.
+  Only after bootstrap completion does a later update process one letter per
+  run, using the existing root limit and seven-day cycle. It uses the current
+  year to select the closest capture.
 
 When the index contains no extracted roots, Refranero accepts it as empty only
 when the title identifies the Refranero and the page contains an explicit
@@ -348,12 +350,15 @@ next request. Body read and validation errors also stop the letter; Refranero
 does not automatically retry body downloads. Variant parsing warnings do not
 prevent Refranero from saving other valid variants.
 
-The first update can take longer because it processes all 26 letters. Closing
-the reader does not stop a worker that is already running. Harvested records are
+The bootstrap can take longer because it processes all remaining letters through
+Z, including when a bootstrap resumes. After bootstrap completion, a later
+update processes one letter per run. Closing the reader does not stop a worker
+that is already running. Harvested records are
 stored only in the local SQLite catalog; Refranero does not add them to the seed
 data or distribute them in npm packages or releases.
-Non-interactive one-shot output can refresh Cervantes Virtual but does not start
-the Wayback bootstrap.
+Non-interactive one-shot output prints before scheduling work. It can refresh due
+Cervantes Virtual work when online and the lease is available, but it does not
+start the Wayback bootstrap.
 
 Refresh output is appended to a `catalog.refresh.log` file next to the SQLite
 database. While the reader is open, the worker publishes its progress and the
@@ -550,49 +555,50 @@ as a diagram. HTML diagram text loads Geist and Instrument Serif from Google
 Fonts; offline, each page uses the system font fallback.
 
 The architecture diagram is embedded here and matches its Mermaid source file.
-
-<!-- coderabbit-ai-generated:v1 -->
-
-<!-- coderabbit-ai-generated-section:v1:bf45d225d0311f7b823c474862d0a9ddfe80df3cfba0cf2604dc2006362d6a7b -->
+Non-interactive random reads the catalog directly and may schedule background
+work without entering the session; interactive mode reads locally and can
+schedule background work; explicit `sync` dispatches directly to ingest adapters.
+`update.rs` orchestrates refresh work and invokes worker callbacks in `main.rs`;
+those callbacks receive import results and persist records and progress through
+the catalog. A resumed Wayback bootstrap processes all remaining letters through
+Z; only after bootstrap completes does a later update process one letter per run.
 
 ```mermaid
 flowchart TB
     subgraph terminal[Terminal layer]
         main[CLI entry<br/>main.rs]
-        worker[Background worker callbacks<br/>main.rs]
         session[Interactive session<br/>session.rs and presentation/]
     end
 
     subgraph core[Core engine]
         catalog[(Local SQLite catalog<br/>store.rs; seed.json compiled in)]
-        update[Update orchestration<br/>update.rs; persistent state machine]
+        update[Update orchestration<br/>update.rs; resumed bootstrap through Z, then one letter per later update]
         policy[Refresh policy<br/>refresh.rs<br/>Daily Cervantes Virtual; weekly Wayback<br/>5-minute lease; incremental Wayback cap: 10 entries]
         ingest[Ingest adapters<br/>ingest.rs; parse HTML into records]
     end
+
+    callbacks[Worker callbacks<br/>main.rs]
 
     subgraph external[External sources]
         virtual[Cervantes Virtual<br/>current thematic pages]
         wayback[Wayback Machine<br/>archived CVC alphabetical index]
     end
 
-    main -->|dispatch| session
+    main -->|non-interactive random: read locally| catalog
+    main -->|interactive command| session
     session -->|read locally| catalog
-    session -.->|request manual background update| worker
-    main -.->|schedule refresh; one-shot random bypasses session| worker
+    main -.->|schedule background worker without session| update
+    session -.->|schedule background worker| update
     main -->|explicit sync| ingest
-    worker -->|select and orchestrate work| update
+    main -->|explicit sync: persist imports| catalog
     update -->|consult cadence and limits| policy
-    update -->|run selected imports| ingest
+    update -->|orchestrate selected imports| callbacks
+    callbacks -->|invoke selected imports| ingest
     ingest -->|fetch current pages| virtual
     ingest -->|fetch archived index and fichas| wayback
-    ingest -.->|parsed records| worker
-    worker -.->|persist imported records| catalog
-
-    state[Wayback progress: bootstrap A-Z, then one letter per run]
-    update --- state
+    ingest -.->|import results| callbacks
+    callbacks -.->|persist records and progress| catalog
 ```
-
-<!-- /coderabbit-ai-generated:v1 -->
 
 Mermaid source files:
 

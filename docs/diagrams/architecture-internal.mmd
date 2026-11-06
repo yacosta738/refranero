@@ -1,34 +1,34 @@
 flowchart TB
     subgraph terminal[Terminal layer]
         main[CLI entry<br/>main.rs]
-        worker[Background worker callbacks<br/>main.rs]
         session[Interactive session<br/>session.rs and presentation/]
     end
 
     subgraph core[Core engine]
         catalog[(Local SQLite catalog<br/>store.rs; seed.json compiled in)]
-        update[Update orchestration<br/>update.rs; persistent state machine]
+        update[Update orchestration<br/>update.rs; resumed bootstrap through Z, then one letter per later update]
         policy[Refresh policy<br/>refresh.rs<br/>Daily Cervantes Virtual; weekly Wayback<br/>5-minute lease; incremental Wayback cap: 10 entries]
         ingest[Ingest adapters<br/>ingest.rs; parse HTML into records]
     end
+
+    callbacks[Worker callbacks<br/>main.rs]
 
     subgraph external[External sources]
         virtual[Cervantes Virtual<br/>current thematic pages]
         wayback[Wayback Machine<br/>archived CVC alphabetical index]
     end
 
-    main -->|dispatch| session
+    main -->|non-interactive random: read locally| catalog
+    main -->|interactive command| session
     session -->|read locally| catalog
-    session -.->|request manual background update| worker
-    main -.->|schedule refresh; one-shot random bypasses session| worker
+    main -.->|schedule background worker without session| update
+    session -.->|schedule background worker| update
     main -->|explicit sync| ingest
-    worker -->|select and orchestrate work| update
+    main -->|explicit sync: persist imports| catalog
     update -->|consult cadence and limits| policy
-    update -->|run selected imports| ingest
+    update -->|orchestrate selected imports| callbacks
+    callbacks -->|invoke selected imports| ingest
     ingest -->|fetch current pages| virtual
     ingest -->|fetch archived index and fichas| wayback
-    ingest -.->|parsed records| worker
-    worker -.->|persist imported records| catalog
-
-    state[Wayback progress: bootstrap A-Z, then one letter per run]
-    update --- state
+    ingest -.->|import results| callbacks
+    callbacks -.->|persist records and progress| catalog
