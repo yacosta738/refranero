@@ -542,12 +542,55 @@ musl is not currently supported.
 
 ### Diagrams
 
-Three standalone HTML diagrams render this system visually. Each file opens
-directly in a browser with no build step or local server. GitHub itself
-renders these links as source code, not as a figure — download the file or
-clone the repository to view the rendered diagram. Diagram text loads the
-Geist and Instrument Serif fonts from Google Fonts over the network; offline,
-the page still renders with the system font fallback.
+The Mermaid diagrams below and in the linked source files render directly on
+GitHub. The standalone HTML diagrams also open directly in a browser with no
+build step or local server. GitHub displays HTML links as source code rather
+than rendered figures; download an HTML file or clone the repository to view it
+as a diagram. HTML diagram text loads Geist and Instrument Serif from Google
+Fonts; offline, each page uses the system font fallback.
+
+The architecture diagram is embedded here and matches its Mermaid source file.
+
+```mermaid
+flowchart TB
+    subgraph terminal[Terminal layer]
+        main[CLI entry<br/>main.rs]
+        session[Interactive session<br/>session.rs and presentation/]
+    end
+
+    subgraph core[Core engine]
+        catalog[(Local SQLite catalog<br/>store.rs; seed.json compiled in)]
+        update[Update orchestration<br/>update.rs; persistent state machine]
+        policy[Refresh policy<br/>refresh.rs<br/>Daily Cervantes Virtual; weekly Wayback<br/>5-minute lease; incremental Wayback cap: 10 entries]
+        ingest[Ingest adapters<br/>ingest.rs; parse HTML into records]
+    end
+
+    subgraph external[External sources]
+        virtual[Cervantes Virtual<br/>current thematic pages]
+        wayback[Wayback Machine<br/>archived CVC alphabetical index]
+    end
+
+    main -->|dispatch| session
+    session -->|read locally| catalog
+    session -.->|start background worker| update
+    update -->|consult cadence and limits| policy
+    update -->|run selected imports| ingest
+    ingest -->|fetch current pages| virtual
+    ingest -->|fetch archived index and fichas| wayback
+    ingest -.->|parsed records| update
+    update -.->|persist imported records| catalog
+
+    state[Wayback progress: bootstrap A-Z, then one letter per run]
+    update --- state
+```
+
+Mermaid source files:
+
+- [Internal architecture Mermaid source](docs/diagrams/architecture-internal.mmd) — modules, catalog, refresh policy, adapters, and external sources.
+- [Reading-flow Mermaid source](docs/diagrams/sequence-reading-flow.mmd) — local-first response and conditional background refresh.
+- [Distribution-pipeline Mermaid source](docs/diagrams/distribution-pipeline.mmd) — tagged releases, assets, registry publishing, and install paths.
+
+Standalone HTML diagrams:
 
 - [`architecture-internal.html`](docs/diagrams/architecture-internal.html) —
   the module bands, the catalog as the only writer target, and the two network

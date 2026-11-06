@@ -112,22 +112,21 @@
   <p class="eyebrow">Refranero CLI · Reading flow</p>
   <h1>What happens when you run it</h1>
   <p class="subtitle">
-    Running <code>refranero</code> with no arguments always answers from the local catalog first.
-    A background refresh is only scheduled if the cache is stale, lease-checked (up to a 5s
-    <code>busy_timeout</code>) and not held by another process — it never blocks the saying you
-    asked for.
+    Interactive startup reads from the local catalog first, then may schedule background refresh
+    work. A five-minute lease prevents overlapping workers; the reader does not wait for refresh.
   </p>
 
   <div class="diagram">
     <svg viewBox="0 0 960 536" role="img" aria-labelledby="seq-title seq-desc">
       <title id="seq-title">Refranero reading session sequence</title>
       <desc id="seq-desc">
-        The user runs refranero. The session asks the local SQLite store for a random saying and
-        prints it immediately. In parallel, if the cache is older than its refresh interval and
-        offline mode was not requested, the session tries to acquire a time-boxed refresh lease from
-        the store; only if the lease is acquired does it spawn a detached background refresh worker
-        that later calls Cervantes Virtual or the Wayback Machine and writes results back to the
-        store, without the interactive session waiting for it.
+        The user starts the interactive reader. The CLI reads a random saying from the local SQLite
+        store and displays it. At startup, if online and refresh policy says work is due, the CLI
+        tries to acquire a refresh lease and starts a detached worker. Interactive startup may begin
+        a persistent Wayback bootstrap across letters A through Z; later updates process one letter.
+        The worker calls a remote source and writes results to the store. One-shot random output may
+        schedule ordinary refresh work but does not start Wayback bootstrap. In the reader, u requests
+        an update and s opens or closes catalog statistics.
       </desc>
       <defs>
         <marker id="sarrow" viewBox="0 0 10 10" refX="8" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
@@ -177,7 +176,7 @@
       <!-- 1. User runs command -->
       <path d="M 84,92 H 290" fill="none" stroke="#bfc0c0" stroke-width="1.2" marker-end="url(#sarrow)" />
       <rect x="110" y="78" width="146" height="12" rx="2" fill="#2d3142" />
-      <text x="183" y="88" fill="#f5f5f5" font-size="10" font-family="'Geist Mono', monospace" text-anchor="middle">refranero (no args)</text>
+      <text x="183" y="88" fill="#f5f5f5" font-size="10" font-family="'Geist Mono', monospace" text-anchor="middle">interactive start</text>
 
       <!-- 2. Session -> Store: read random -->
       <path d="M 298,112 H 510" fill="none" stroke="#f08a59" stroke-width="1.2" marker-end="url(#sarrow-coral)" />
@@ -198,12 +197,12 @@
       <rect x="276" y="196" width="612" height="292" rx="4" fill="none" stroke="#bfc0c0" stroke-width="0.8" />
       <path d="M 276,196 H 356 V 206 H 346 L 336 216 H 276 Z" fill="#393e53" stroke="#bfc0c0" stroke-width="0.8" />
       <text x="286" y="208" fill="#f5f5f5" font-size="9" font-weight="600" font-family="'Geist Mono', monospace">ALT</text>
-      <text x="366" y="208" fill="#bfc0c0" font-size="9" font-family="'Geist', sans-serif">cache is stale and --offline was not set</text>
+      <text x="366" y="208" fill="#bfc0c0" font-size="9" font-family="'Geist', sans-serif">online; refresh due or interactive Wayback bootstrap pending</text>
 
       <!-- 5. Session -> Store: try to acquire refresh lease -->
       <path d="M 298,236 H 510" fill="none" stroke="#bfc0c0" stroke-width="1.2" marker-end="url(#sarrow)" />
       <rect x="330" y="222" width="158" height="12" rx="2" fill="#2d3142" />
-      <text x="409" y="232" fill="#f5f5f5" font-size="10" font-family="'Geist Mono', monospace" text-anchor="middle">try_acquire_refresh_lease</text>
+      <text x="409" y="232" fill="#f5f5f5" font-size="10" font-family="'Geist Mono', monospace" text-anchor="middle">acquire 5-minute lease</text>
 
       <!-- 6. Store -> Session: lease acquired -->
       <path d="M 510,252 H 298" fill="none" stroke="#bfc0c0" stroke-width="1" stroke-dasharray="4,3" marker-end="url(#sarrow)" />
@@ -233,7 +232,7 @@
       <!-- else: offline, fresh, lease not acquired, or spawn failed -->
       <line x1="276" y1="400" x2="888" y2="400" stroke="#bfc0c0" stroke-width="0.8" stroke-dasharray="4,3" />
       <text x="286" y="414" fill="#bfc0c0" font-size="9" font-weight="600" font-family="'Geist Mono', monospace">[ELSE]</text>
-      <text x="356" y="414" fill="#bfc0c0" font-size="9" font-family="'Geist', sans-serif">cache is fresh, --offline was set, lease is held, or the spawn failed</text>
+      <text x="356" y="414" fill="#bfc0c0" font-size="9" font-family="'Geist', sans-serif">offline, no work due, lease held, or spawn failed</text>
 
       <!-- 11. no-op -->
       <path d="M 510,448 H 302 Q 294,448 294,456 V 460 Q 294,468 302,468 H 440" fill="none" stroke="#8e98ac" stroke-width="1" stroke-dasharray="2,3" marker-end="url(#sarrow)" />
@@ -270,17 +269,18 @@
     <div class="card">
       <div class="card-header"><span class="card-dot muted"></span><h3>Background path — kept out of your way</h3></div>
       <ul>
-        <li>A refresh worker only starts when the cached snapshot is older than its interval.</li>
+        <li>Interactive startup may schedule a Wayback bootstrap, which processes letters A–Z. Later update runs process one letter.</li>
         <li>It takes a time-boxed lease, so two overlapping runs cannot race each other.</li>
         <li>If another process already holds the lease, this run skips the refresh entirely.</li>
         <li><code>--offline</code> disables this path entirely for that invocation.</li>
+        <li>One-shot random output does not start Wayback bootstrap. In the reader, <code>u</code> requests an update and <code>s</code> toggles catalog statistics.</li>
       </ul>
     </div>
   </div>
 
   <footer>
     <span>refranero · reading flow</span>
-    <span>source: src/session.rs, store.rs, refresh.rs, ingest.rs</span>
+    <span>source: src/main.rs, session.rs, update.rs, store.rs, refresh.rs, ingest.rs</span>
   </footer>
 </div>
 </body>

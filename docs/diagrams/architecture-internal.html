@@ -164,7 +164,7 @@
   <h1>How the binary is put together</h1>
   <p class="subtitle">
     One Rust executable, four layers of responsibility. The terminal prints, the core engine owns
-    the local catalog and decides when data is stale, the adapters talk to the network, and the
+    the local catalog and coordinates refresh work, the adapters talk to the network, and the
     remote portals are the only outside world. No plain read ever touches the network.
   </p>
 
@@ -173,11 +173,13 @@
       <title id="arch-int-title">Refranero internal module architecture</title>
       <desc id="arch-int-desc">
         Three stacked bands. The terminal layer holds the CLI entry point and the interactive
-        reader. The core engine holds the local SQLite catalog, the refresh worker, and the ingest
-        adapters. The external sources band holds Cervantes Virtual and the Wayback Machine, which
-        only the adapters contact. The interactive reader reads the catalog along the focal path and
-        spawns the refresh worker in the background; the worker calls the adapters, the adapters
-        fetch remote pages, and the worker persists the imported records back into the catalog.
+        reader. The core engine holds the local SQLite catalog, update orchestration, refresh policy,
+        and ingest adapters. The external sources band holds Cervantes Virtual and the Wayback
+        Machine, which only the adapters contact. The interactive reader reads the catalog along the
+        focal path and starts background update orchestration; main.rs runs the worker callbacks,
+        update.rs selects source work and drives the persistent Wayback letter state machine, and
+        refresh.rs defines cadence and limits. The adapters fetch remote pages and the worker
+        persists imported records back into the catalog.
       </desc>
 
       <defs>
@@ -275,13 +277,13 @@
       <text x="244" y="368" fill="#bfc0c0" font-size="11" font-family="'Geist Mono', monospace" text-anchor="middle">store.rs</text>
       <text x="244" y="383" fill="#8e98ac" font-size="10" font-family="'Geist Mono', monospace" text-anchor="middle">seed.json compiled in</text>
 
-      <!-- Refresh worker -->
+      <!-- Update orchestration -->
       <rect x="496" y="304" width="248" height="88" rx="6" fill="#393e53" stroke="#bfc0c0" stroke-width="1" />
       <rect x="510" y="316" width="54" height="15" rx="2" fill="none" stroke="rgba(191,192,192,0.45)" stroke-width="0.8" />
-      <text x="537" y="327" fill="#bfc0c0" font-size="8.5" font-family="'Geist Mono', monospace" text-anchor="middle" letter-spacing="0.08em">POLICY</text>
-      <text x="620" y="350" fill="#f5f5f5" font-size="15" font-weight="600" font-family="'Geist', sans-serif" text-anchor="middle">Refresh Worker</text>
-      <text x="620" y="368" fill="#bfc0c0" font-size="11" font-family="'Geist Mono', monospace" text-anchor="middle">refresh.rs</text>
-      <text x="620" y="383" fill="#8e98ac" font-size="10" font-family="'Geist Mono', monospace" text-anchor="middle">lease · 24h / 7d intervals</text>
+      <text x="537" y="327" fill="#bfc0c0" font-size="8.5" font-family="'Geist Mono', monospace" text-anchor="middle" letter-spacing="0.08em">UPDATE</text>
+      <text x="620" y="350" fill="#f5f5f5" font-size="15" font-weight="600" font-family="'Geist', sans-serif" text-anchor="middle">Update Orchestration</text>
+      <text x="620" y="368" fill="#bfc0c0" font-size="11" font-family="'Geist Mono', monospace" text-anchor="middle">update.rs · state machine</text>
+      <text x="620" y="383" fill="#8e98ac" font-size="10" font-family="'Geist Mono', monospace" text-anchor="middle">bootstrap A–Z, then one letter/run</text>
 
       <!-- Ingest adapters -->
       <rect x="872" y="304" width="248" height="88" rx="6" fill="#393e53" stroke="#bfc0c0" stroke-width="1" />
@@ -301,11 +303,11 @@
       <text x="996" y="584" fill="#f5f5f5" font-size="15" font-weight="600" font-family="'Geist', sans-serif" text-anchor="middle">Wayback Machine</text>
       <text x="996" y="603" fill="#8e98ac" font-size="11" font-family="'Geist Mono', monospace" text-anchor="middle">archived letter index</text>
 
-      <!-- Annotation: the two refresh cycles, read in the empty left area -->
-      <text x="96" y="572" fill="#8e98ac" font-size="9" font-family="'Geist Mono', monospace" letter-spacing="0.12em">REFRESH CADENCE</text>
-      <text x="96" y="600" fill="#bfc0c0" font-size="12.5" font-family="'Instrument Serif', serif" font-style="italic">Daily: the Cervantes portal index.</text>
-      <text x="96" y="620" fill="#bfc0c0" font-size="12.5" font-family="'Instrument Serif', serif" font-style="italic">Weekly: the archived letter index,</text>
-      <text x="96" y="640" fill="#bfc0c0" font-size="12.5" font-family="'Instrument Serif', serif" font-style="italic">capped at ten entries per run.</text>
+      <!-- Refresh policy, read in the empty left area -->
+      <text x="96" y="572" fill="#8e98ac" font-size="9" font-family="'Geist Mono', monospace" letter-spacing="0.12em">POLICY · refresh.rs</text>
+      <text x="96" y="600" fill="#bfc0c0" font-size="12.5" font-family="'Instrument Serif', serif" font-style="italic">Daily portal; weekly Wayback.</text>
+      <text x="96" y="620" fill="#bfc0c0" font-size="12.5" font-family="'Instrument Serif', serif" font-style="italic">Five-minute worker lease.</text>
+      <text x="96" y="640" fill="#bfc0c0" font-size="12.5" font-family="'Instrument Serif', serif" font-style="italic">Incremental Wayback: ten-entry cap.</text>
 
       <!-- Legend: bottom horizontal strip -->
       <line x1="48" y1="706" x2="1192" y2="706" stroke="rgba(245,245,245,0.12)" stroke-width="0.9" />
@@ -343,8 +345,10 @@
       <div class="card-header"><span class="card-dot ink"></span><h3>Adapters parse, the caller writes</h3></div>
       <ul>
         <li><strong>ingest.rs</strong> turns remote HTML into catalog rows and returns them.</li>
-        <li><strong>refresh.rs</strong> takes a time-boxed lease and persists those rows through
-          <strong>store.rs</strong>, the single owner of the database.</li>
+        <li><strong>update.rs</strong> orchestrates source work and the persistent Wayback cursor;
+          <strong>main.rs</strong> runs worker callbacks.</li>
+        <li><strong>refresh.rs</strong> defines cadence, the five-minute lease, and the incremental
+          Wayback cap. <strong>store.rs</strong> owns persistence.</li>
       </ul>
     </div>
     <div class="card">
@@ -359,7 +363,7 @@
 
   <footer>
     <span>refranero · internal architecture</span>
-    <span>source: src/main.rs, session.rs, store.rs, refresh.rs, ingest.rs</span>
+    <span>source: src/main.rs, session.rs, update.rs, refresh.rs, store.rs, ingest.rs</span>
   </footer>
 </div>
 </body>

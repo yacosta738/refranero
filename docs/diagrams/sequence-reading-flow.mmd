@@ -1,0 +1,28 @@
+sequenceDiagram
+    actor User
+    participant CLI as CLI / Session
+    participant Catalog as Local SQLite Catalog
+    participant Worker as Background Refresh Worker
+    participant Sources as Cervantes Virtual / Wayback
+
+    User->>CLI: Start interactive reader or one-shot random command
+    CLI->>Catalog: Read random entry
+    Catalog-->>CLI: Local entry
+    CLI-->>User: Display entry without waiting for network
+
+    alt Interactive, online, and work is due or bootstrap is pending
+        CLI->>Catalog: Try to acquire 5-minute refresh lease
+        Catalog-->>CLI: Lease acquired or already held
+        CLI-)Worker: Start detached worker only if lease was acquired
+        Note over CLI,Worker: Reader remains responsive while refresh runs
+        Worker->>Sources: Fetch selected source pages
+        Sources-->>Worker: Return page data
+        Worker->>Catalog: Save imported entries and progress
+        Worker-->>CLI: Publish progress and completion state
+    else One-shot output, offline, or no work due
+        Note over CLI,Catalog: Serve the entry from the local catalog; do not start a duplicate worker
+    end
+
+    Note over Worker,Sources: Interactive startup may bootstrap A-Z; later Wayback runs process one letter
+    Note over CLI,Sources: One-shot output may refresh Cervantes Virtual when due, but never starts full Wayback bootstrap
+    Note over User,CLI: Reader keys: u requests a forced online update if a lease is available; s opens or closes catalog statistics
