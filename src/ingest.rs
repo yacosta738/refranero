@@ -15,6 +15,17 @@ const VIRTUAL_BASE: &str =
 const CVC_BASE: &str = "https://cvc.cervantes.es/lengua/refranero/";
 const MAX_BODY: usize = 8 * 1024 * 1024;
 
+#[derive(Debug)]
+pub struct UnavailableWaybackIndex;
+
+impl std::fmt::Display for UnavailableWaybackIndex {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        formatter.write_str("no available Wayback index capture")
+    }
+}
+
+impl std::error::Error for UnavailableWaybackIndex {}
+
 /// Browser-oriented HTTP client with finite timeouts.
 pub fn http_client() -> Result<Client> {
     http_client_with_timeout(Duration::from_secs(20))
@@ -95,7 +106,9 @@ fn fetch_wayback_html(
 ) -> Result<String> {
     let response = transport.get(replay_url, activity)?;
     validate_wayback_final_url(response.url())?;
-    read_html_response(response).map_err(mark_wayback_body_error)
+    let html = read_html_response(response).map_err(mark_wayback_body_error)?;
+    validate_wayback_soft_error(&html)?;
+    Ok(html)
 }
 
 #[derive(Debug)]
@@ -118,6 +131,18 @@ fn is_retryable_wayback_failure(error: &anyhow::Error) -> bool {
     error
         .chain()
         .any(|cause| cause.is::<RetryableWaybackRequest>())
+}
+
+fn is_permanent_variant_http_error(error: &anyhow::Error) -> bool {
+    error
+        .chain()
+        .find_map(|cause| cause.downcast_ref::<reqwest::Error>())
+        .and_then(reqwest::Error::status)
+        .is_some_and(|status| {
+            status.is_client_error()
+                && status != reqwest::StatusCode::REQUEST_TIMEOUT
+                && status != reqwest::StatusCode::TOO_MANY_REQUESTS
+        })
 }
 
 fn classify_wayback_request_error(error: reqwest::Error) -> anyhow::Error {
@@ -161,11 +186,19 @@ fn read_html_response(response: reqwest::blocking::Response) -> Result<String> {
 
 /// Read up to `limit` entries from one current Cervantes Virtual category page.
 pub fn import_virtual(client: &Client, category: Category, limit: usize) -> Result<Vec<NewSaying>> {
+    import_virtual_with_fetch(category, limit, |url| fetch_html(client, url))
+}
+
+pub fn import_virtual_with_fetch(
+    category: Category,
+    limit: usize,
+    fetch: impl FnOnce(&str) -> Result<String>,
+) -> Result<Vec<NewSaying>> {
     if category == Category::Paremia {
         bail!("use an explicit modern category: refran, proverbio, dicho, adivinanza or cita");
     }
     let url = format!("{VIRTUAL_BASE}{}/", category.url_segment());
-    let html = fetch_html(client, &url).with_context(|| format!("retrieving {url}"))?;
+    let html = fetch(&url).with_context(|| format!("retrieving {url}"))?;
     Ok(parse_virtual(&html, category, &url, limit))
 }
 
@@ -382,7 +415,11 @@ where
     };
     index_activity("index")?;
     let capture = find_wayback_capture(transport, &index_url, year, &mut index_activity)?
-        .ok_or_else(|| anyhow!("no available HTTP 200 Wayback capture for {index_url}"))?;
+        .ok_or_else(|| {
+            anyhow!(UnavailableWaybackIndex).context(format!(
+                "no available HTTP 200 Wayback capture for {index_url}"
+            ))
+        })?;
     let html = fetch_wayback_html(transport, capture.replay_url.as_str(), &mut index_activity)
         .with_context(|| format!("retrieving {}", capture.replay_url))?;
     let roots = parse_wayback_index(&html, &capture.timestamp, limit);
@@ -410,7 +447,7 @@ where
     )
 }
 
-fn validate_wayback_index_html(html: &str, has_roots: bool) -> Result<()> {
+fn validate_wayback_soft_error(html: &str) -> Result<()> {
     let document = Html::parse_document(html);
     let title_selector = Selector::parse("title").expect("static CSS selector");
     let title = document
@@ -434,8 +471,21 @@ fn validate_wayback_index_html(html: &str, has_roots: bool) -> Result<()> {
         .iter()
         .any(|marker| text.contains(marker) || title.contains(marker))
     {
-        bail!("Wayback index replay returned a soft-error page");
+        bail!("Wayback replay returned a soft-error page");
     }
+    Ok(())
+}
+
+fn validate_wayback_index_html(html: &str, has_roots: bool) -> Result<()> {
+    validate_wayback_soft_error(html)?;
+    let document = Html::parse_document(html);
+    let title_selector = Selector::parse("title").expect("static CSS selector");
+    let title = document
+        .select(&title_selector)
+        .next()
+        .map(|element| normalize(&element.text().collect::<String>()).to_ascii_lowercase())
+        .unwrap_or_default();
+    let text = normalize(&document.root_element().text().collect::<String>()).to_ascii_lowercase();
     if has_roots {
         return Ok(());
     }
@@ -803,8 +853,10 @@ where
         ))?;
         let capture = fetch(&original, year, events)?;
         let links = if let Some(capture) = capture {
-            update_spanish_provenance(&mut entry, &original, &capture);
-            report.captured_spanish_pars.insert(par.clone());
+            if is_confirmed_spanish_root(&original) {
+                update_spanish_provenance(&mut entry, &original, &capture);
+                report.captured_spanish_pars.insert(par.clone());
+            }
             report.variants_available += 1;
             let discovery = parse_wayback_language_links(&capture.html, &par);
             report.warnings.extend(discovery.warnings);
@@ -825,7 +877,18 @@ where
         ))?;
         report.entries.push(entry);
         for link in links.iter().filter(|link| link.language != "es") {
-            let mut capture = fetch(&link.original_url, year, events)?;
+            let mut capture = match fetch(&link.original_url, year, events) {
+                Ok(capture) => capture,
+                Err(error) if is_permanent_variant_http_error(&error) => {
+                    report.warnings.push(WaybackImportWarning {
+                        par: link.par.clone(),
+                        language: Some(link.language.clone()),
+                        reason: format!("permanent HTTP error retrieving variant: {error:#}"),
+                    });
+                    continue;
+                }
+                Err(error) => return Err(error),
+            };
             let variants = collect_wayback_variants(
                 std::slice::from_ref(link),
                 |_| Ok(capture.take()),
@@ -848,6 +911,11 @@ where
         })?;
     }
     Ok(report)
+}
+
+fn is_confirmed_spanish_root(url: &Url) -> bool {
+    url.query_pairs()
+        .any(|(key, value)| key.eq_ignore_ascii_case("Lng") && value == "0")
 }
 
 fn update_spanish_provenance(entry: &mut NewSaying, original_url: &Url, capture: &CapturedFicha) {
@@ -1246,6 +1314,100 @@ mod tests {
 
         assert_eq!(entries.len(), 55);
         assert_eq!(entries.last().unwrap().text, "Refrán número 54.");
+    }
+
+    #[test]
+    fn soft_error_validator_applies_to_replay_bodies() {
+        for body in [
+            "<title>Wayback Machine Error</title>",
+            "Service unavailable",
+            "Robot check",
+        ] {
+            assert!(validate_wayback_soft_error(body).is_err(), "{body}");
+        }
+        assert!(
+            validate_wayback_soft_error("<title>Refranero</title><p>Contenido válido</p>").is_ok()
+        );
+    }
+
+    #[test]
+    fn fallback_lng_seven_root_capture_does_not_confirm_spanish_provenance() {
+        let roots = parse_wayback_index(
+            r#"<a href="Ficha.aspx?Par=17&amp;Lng=7">Fallback root</a>"#,
+            "20240511091123",
+            1,
+        );
+        let original = roots[0].original_url.clone().unwrap();
+        let replay = Url::parse("https://web.archive.org/web/20240511091123/https://cvc.cervantes.es/lengua/refranero/Ficha.aspx?Par=17&Lng=7").unwrap();
+        let mut stored = Vec::new();
+        let report = stream_wayback_fichas(
+            roots,
+            2024,
+            |url, _, _| {
+                assert_eq!(url.as_str(), original);
+                Ok(Some(CapturedFicha {
+                    html: "<div id='idiomas'></div>".into(),
+                    replay_url: replay.clone(),
+                    timestamp: "20240511091123".into(),
+                }))
+            },
+            &mut |event| {
+                if let WaybackEvent::Entries(entries, pars) = event {
+                    stored.extend_from_slice(entries);
+                    assert!(pars.is_empty());
+                }
+                Ok(())
+            },
+        )
+        .unwrap();
+        assert!(report.captured_spanish_pars.is_empty());
+        assert_eq!(stored.last().unwrap().source_url, "https://web.archive.org/web/20240511091123/https://cvc.cervantes.es/lengua/refranero/Ficha.aspx?Par=17&Lng=7");
+    }
+
+    #[test]
+    fn permanent_variant_http_error_skips_variant_and_continues_later_root() {
+        let roots = parse_wayback_index(
+            r#"<a href="Ficha.aspx?Par=1&amp;Lng=0">First</a><a href="Ficha.aspx?Par=2&amp;Lng=0">Second</a>"#,
+            "20240511091123",
+            2,
+        );
+        let first_root = r#"<div id="idiomas"><a href="Ficha.aspx?Par=1&amp;Lng=9"><acronym>EN</acronym></a></div>"#;
+        let replay = |url: &Url, html: &str| CapturedFicha {
+            html: html.into(),
+            replay_url: url.clone(),
+            timestamp: "20240511091123".into(),
+        };
+        let calls = Cell::new(0);
+        let report = stream_wayback_fichas(
+            roots,
+            2024,
+            |url, _, _| {
+                let call = calls.get() + 1;
+                calls.set(call);
+                match call {
+                    1 => Ok(Some(replay(url, first_root))),
+                    2 => {
+                        use reqwest::ResponseBuilderExt;
+                        let response: reqwest::blocking::Response = http::Response::builder()
+                            .status(404)
+                            .url(url.clone())
+                            .body(String::new())
+                            .unwrap()
+                            .into();
+                        Err(anyhow!(response.error_for_status().unwrap_err()))
+                    }
+                    3 => Ok(Some(replay(url, "<div id='idiomas'></div>"))),
+                    _ => panic!("unexpected request"),
+                }
+            },
+            &mut |_| Ok(()),
+        )
+        .unwrap();
+
+        assert_eq!(calls.get(), 3);
+        assert_eq!(report.roots_processed, 2);
+        assert_eq!(report.warnings.len(), 1);
+        assert_eq!(report.warnings[0].language.as_deref(), Some("en"));
     }
 
     #[test]

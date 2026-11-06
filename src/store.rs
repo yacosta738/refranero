@@ -4,7 +4,7 @@ use anyhow::{bail, Context, Result};
 use rusqlite::{params, Connection, OptionalExtension, TransactionBehavior};
 use serde::{Deserialize, Serialize};
 use std::collections::HashSet;
-use std::path::Path;
+use std::path::{Path, PathBuf};
 
 // Increment when a later release changes the bundled source-link mappings.
 const SOURCE_LINK_MIGRATION_KEY: &str = "source_link_migration_version";
@@ -15,6 +15,10 @@ const WAYBACK_REFRESH_KEY: &str = "last_wayback_refresh";
 const WAYBACK_CURSOR_KEY: &str = "wayback_cursor";
 const WAYBACK_BOOTSTRAP_NEXT_KEY: &str = "wayback_bootstrap_next";
 const WAYBACK_BOOTSTRAP_COMPLETE_KEY: &str = "wayback_bootstrap_complete";
+const GROUP_UNIQUENESS_MIGRATION_KEY: &str = "group_uniqueness_migration_version";
+const CATALOG_GENERATION_KEY: &str = "catalog_generation";
+const WAYBACK_UNRESOLVED_KEY: &str = "wayback_unresolved_letters";
+const WAYBACK_RETRY_DEADLINE_KEY: &str = "wayback_retry_deadline";
 
 /// Progress of the background refresh, published by the worker for the reader.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -35,6 +39,7 @@ pub struct RefreshError {
 /// Owns an initialized SQLite connection.
 pub struct Store {
     connection: Connection,
+    path: Option<PathBuf>,
 }
 
 impl Store {
@@ -61,17 +66,22 @@ impl Store {
                source_url TEXT NOT NULL,
                original_url TEXT,
                captured_at TEXT,
-               group_id TEXT,
-               UNIQUE(text, category, language, source)
-             );
-             CREATE INDEX IF NOT EXISTS idx_sayings_category_lang
-               ON sayings(category, language);
+                group_id TEXT
+              );
+              CREATE INDEX IF NOT EXISTS idx_sayings_category_lang
+                ON sayings(category, language);
+              CREATE UNIQUE INDEX IF NOT EXISTS idx_sayings_grouped_unique
+                ON sayings(text, category, language, source, group_id) WHERE group_id IS NOT NULL;
+              CREATE UNIQUE INDEX IF NOT EXISTS idx_sayings_ungrouped_unique
+                ON sayings(text, category, language, source) WHERE group_id IS NULL;
              CREATE TABLE IF NOT EXISTS metadata (
                key TEXT PRIMARY KEY,
                value TEXT NOT NULL
              );",
         )?;
-        let mut store = Self { connection };
+        let path = (path != Path::new(":memory:")).then(|| path.to_path_buf());
+        let mut store = Self { connection, path };
+        store.migrate_group_uniqueness()?;
         let seeds: Vec<NewSaying> = serde_json::from_str(include_str!("../data/seed.json"))?;
         let is_new_catalog = store.count()? == 0;
         if is_new_catalog {
@@ -79,6 +89,78 @@ impl Store {
         }
         store.migrate_seed_source_links(&seeds, is_new_catalog)?;
         Ok(store)
+    }
+
+    fn migrate_group_uniqueness(&mut self) -> Result<()> {
+        let transaction = self
+            .connection
+            .transaction_with_behavior(TransactionBehavior::Immediate)?;
+        let version = transaction
+            .query_row(
+                "SELECT value FROM metadata WHERE key = ?1",
+                [GROUP_UNIQUENESS_MIGRATION_KEY],
+                |row| row.get::<_, String>(0),
+            )
+            .optional()?;
+        if version.as_deref() == Some("1") {
+            transaction.commit()?;
+            return Ok(());
+        }
+        let has_sayings: bool = transaction.query_row(
+            "SELECT EXISTS(SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = 'sayings')",
+            [],
+            |row| row.get(0),
+        )?;
+        if has_sayings {
+            let has_legacy_unique = {
+                let mut indexes = transaction.prepare("PRAGMA index_list(sayings)")?;
+                let rows = indexes.query_map([], |row| {
+                    Ok((row.get::<_, String>(1)?, row.get::<_, String>(3)?))
+                })?;
+                rows.collect::<rusqlite::Result<Vec<_>>>()?
+                    .iter()
+                    .any(|(_, origin)| origin == "u")
+            };
+            if has_legacy_unique {
+                transaction.execute_batch(
+                    "CREATE TABLE sayings_migrated (
+                       id INTEGER PRIMARY KEY, text TEXT NOT NULL, category TEXT NOT NULL,
+                       language TEXT NOT NULL, source TEXT NOT NULL, source_url TEXT NOT NULL,
+                       original_url TEXT, captured_at TEXT, group_id TEXT
+                     );
+                     INSERT INTO sayings_migrated SELECT id, text, category, language, source,
+                       source_url, original_url, captured_at, group_id FROM sayings;
+                     DROP TABLE sayings;
+                     ALTER TABLE sayings_migrated RENAME TO sayings;
+                     CREATE INDEX idx_sayings_category_lang ON sayings(category, language);
+                     CREATE UNIQUE INDEX idx_sayings_grouped_unique
+                       ON sayings(text, category, language, source, group_id) WHERE group_id IS NOT NULL;
+                     CREATE UNIQUE INDEX idx_sayings_ungrouped_unique
+                       ON sayings(text, category, language, source) WHERE group_id IS NULL;"
+                )?;
+                // Associations silently discarded by the old constraint cannot be reconstructed.
+                // Force a complete bootstrap so surviving records are re-associated from source.
+                for key in [
+                    WAYBACK_BOOTSTRAP_COMPLETE_KEY,
+                    WAYBACK_BOOTSTRAP_NEXT_KEY,
+                    WAYBACK_CURSOR_KEY,
+                    WAYBACK_REFRESH_KEY,
+                    WAYBACK_UNRESOLVED_KEY,
+                ] {
+                    transaction.execute("DELETE FROM metadata WHERE key = ?1", [key])?;
+                }
+                transaction.execute(
+                    "INSERT INTO metadata(key, value) VALUES (?1, 'A') ON CONFLICT(key) DO UPDATE SET value = excluded.value",
+                    [WAYBACK_BOOTSTRAP_NEXT_KEY],
+                )?;
+            }
+        }
+        transaction.execute(
+            "INSERT INTO metadata(key, value) VALUES (?1, '1') ON CONFLICT(key) DO UPDATE SET value = excluded.value",
+            [GROUP_UNIQUENESS_MIGRATION_KEY],
+        )?;
+        transaction.commit()?;
+        Ok(())
     }
 
     fn migrate_seed_source_links(
@@ -153,6 +235,27 @@ impl Store {
                     .context("invalid last_successful_refresh timestamp")
             })
             .transpose()
+    }
+
+    /// Monotonic generation for persisted catalog content changes.
+    pub fn catalog_generation(&self) -> Result<i64> {
+        self.metadata(CATALOG_GENERATION_KEY)?
+            .map_or(Ok(0), |value| {
+                value.parse::<i64>().context("invalid catalog generation")
+            })
+    }
+
+    /// Create the separate-connection adapter used by Wayback request policy.
+    pub fn wayback_retry_deadline_persistence(
+        &self,
+        owner: &str,
+    ) -> Option<Box<dyn crate::wayback_request::RetryDeadlinePersistence>> {
+        self.path.as_ref().map(|path| {
+            Box::new(SqliteRetryDeadlinePersistence {
+                path: path.clone(),
+                owner: owner.to_owned(),
+            }) as Box<dyn crate::wayback_request::RetryDeadlinePersistence>
+        })
     }
 
     /// Acquire the background refresh lease if no active worker owns it.
@@ -230,6 +333,18 @@ impl Store {
     /// Record a successful Wayback run and the processed letter in one transaction.
     pub fn record_wayback_success(&mut self, letter: char, timestamp: i64) -> Result<()> {
         let transaction = self.connection.transaction()?;
+        let unresolved: String = transaction
+            .query_row(
+                "SELECT value FROM metadata WHERE key = ?1",
+                [WAYBACK_UNRESOLVED_KEY],
+                |row| row.get(0),
+            )
+            .optional()?
+            .unwrap_or_default();
+        transaction.execute(
+            "INSERT INTO metadata(key, value) VALUES (?1, ?2) ON CONFLICT(key) DO UPDATE SET value = excluded.value",
+            params![WAYBACK_UNRESOLVED_KEY, unresolved.chars().filter(|item| *item != letter).collect::<String>()],
+        )?;
         for (key, value) in [
             (WAYBACK_REFRESH_KEY, timestamp.to_string()),
             (WAYBACK_CURSOR_KEY, letter.to_string()),
@@ -264,11 +379,42 @@ impl Store {
 
     /// Commit one successful bootstrap letter and its resume point atomically.
     pub fn record_wayback_bootstrap_success(&mut self, letter: char, timestamp: i64) -> Result<()> {
+        self.record_wayback_bootstrap(letter, timestamp, false)
+    }
+
+    fn record_wayback_bootstrap(
+        &mut self,
+        letter: char,
+        timestamp: i64,
+        unavailable: bool,
+    ) -> Result<()> {
         let letter = letter.to_ascii_uppercase();
         if !letter.is_ascii_uppercase() {
             anyhow::bail!("Wayback bootstrap letter must be A-Z");
         }
         let transaction = self.connection.transaction()?;
+        let unresolved: String = transaction
+            .query_row(
+                "SELECT value FROM metadata WHERE key = ?1",
+                [WAYBACK_UNRESOLVED_KEY],
+                |row| row.get(0),
+            )
+            .optional()?
+            .unwrap_or_default();
+        let unresolved = if unavailable {
+            let mut letters: Vec<char> = unresolved.chars().collect();
+            if !letters.contains(&letter) {
+                letters.push(letter);
+            }
+            letters.sort_unstable();
+            letters.iter().collect::<String>()
+        } else {
+            unresolved.chars().filter(|item| *item != letter).collect()
+        };
+        transaction.execute(
+            "INSERT INTO metadata(key, value) VALUES (?1, ?2) ON CONFLICT(key) DO UPDATE SET value = excluded.value",
+            params![WAYBACK_UNRESOLVED_KEY, unresolved],
+        )?;
         for (key, value) in [
             (WAYBACK_REFRESH_KEY, timestamp.to_string()),
             (WAYBACK_CURSOR_KEY, letter.to_string()),
@@ -308,6 +454,31 @@ impl Store {
         Ok(self
             .metadata(WAYBACK_CURSOR_KEY)?
             .and_then(|value| value.chars().next()))
+    }
+
+    pub fn wayback_unresolved_letters(&self) -> Result<Vec<char>> {
+        Ok(self
+            .metadata(WAYBACK_UNRESOLVED_KEY)?
+            .unwrap_or_default()
+            .chars()
+            .collect())
+    }
+
+    pub fn record_wayback_bootstrap_unavailable(
+        &mut self,
+        letter: char,
+        timestamp: i64,
+    ) -> Result<()> {
+        self.record_wayback_bootstrap(letter, timestamp, true)
+    }
+
+    pub fn clear_wayback_unresolved(&self, letter: char) -> Result<()> {
+        let remaining: String = self
+            .wayback_unresolved_letters()?
+            .into_iter()
+            .filter(|item| *item != letter)
+            .collect();
+        self.set_metadata(WAYBACK_UNRESOLVED_KEY, &remaining)
     }
 
     /// Publish refresh progress for the interactive reader.
@@ -436,7 +607,8 @@ impl Store {
             if entries.iter().any(|entry| entry.source != expected_source) {
                 bail!("automatic portal refresh accepts only cervantes_virtual records");
             }
-            transaction.execute("DELETE FROM sayings WHERE source = ?1", [expected_source])?;
+            let deleted =
+                transaction.execute("DELETE FROM sayings WHERE source = ?1", [expected_source])?;
             let mut inserted = 0;
             {
                 let mut statement = transaction.prepare(
@@ -462,6 +634,9 @@ impl Store {
                  ON CONFLICT(key) DO UPDATE SET value = excluded.value",
                 [timestamp.to_string()],
             )?;
+            if deleted > 0 || inserted > 0 {
+                bump_catalog_generation(&transaction)?;
+            }
             inserted
         };
         transaction.commit()?;
@@ -516,17 +691,19 @@ impl Store {
                 }
             }
         }
+        let transaction = self.connection.unchecked_transaction()?;
         let mut created = 0;
-        let mut insert_ignored = self.connection.prepare_cached(
+        let mut changed_any = false;
+        let mut insert_ignored = transaction.prepare(
             "INSERT OR IGNORE INTO sayings
              (text, category, language, source, source_url, original_url, captured_at, group_id)
              VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8)",
         )?;
-        let mut upsert_captured = self.connection.prepare_cached(
+        let mut upsert_captured = transaction.prepare(
             "INSERT INTO sayings
              (text, category, language, source, source_url, original_url, captured_at, group_id)
              VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8)
-             ON CONFLICT(text, category, language, source) DO UPDATE SET
+             ON CONFLICT(text, category, language, source, group_id) WHERE group_id IS NOT NULL DO UPDATE SET
                source_url = excluded.source_url,
                original_url = excluded.original_url,
                captured_at = excluded.captured_at
@@ -554,22 +731,41 @@ impl Store {
                 e.group_id
             ];
             if update_captured_ficha {
-                let existed: bool = self.connection.query_row(
-                    "SELECT EXISTS(
+                let existed: bool = transaction.query_row(
+                     "SELECT EXISTS(
                        SELECT 1 FROM sayings
-                       WHERE text = ?1 AND category = ?2 AND language = ?3 AND source = ?4
-                     )",
-                    params![e.text, e.category, e.language, e.source],
+                        WHERE text = ?1 AND category = ?2 AND language = ?3 AND source = ?4 AND group_id IS ?5
+                      )",
+                    params![e.text, e.category, e.language, e.source, e.group_id],
                     |row| row.get(0),
                 )?;
                 let changed = upsert_captured.execute(params)?;
+                changed_any |= changed > 0;
                 if !existed {
                     created += changed;
                 }
             } else {
-                created += insert_ignored.execute(params)?;
+                let changed = insert_ignored.execute(params)?;
+                changed_any |= changed > 0;
+                created += changed;
+            }
+            if let Some(group_id) = e.group_id.as_deref() {
+                let exists: bool = transaction.query_row(
+                    "SELECT EXISTS(SELECT 1 FROM sayings WHERE text = ?1 AND category = ?2 AND language = ?3 AND source = ?4 AND group_id = ?5)",
+                    params![e.text, e.category, e.language, e.source, group_id],
+                    |row| row.get(0),
+                )?;
+                if !exists {
+                    bail!("grouped saying was not persisted: {} ({group_id})", e.text);
+                }
             }
         }
+        drop(insert_ignored);
+        drop(upsert_captured);
+        if changed_any {
+            bump_catalog_generation(&transaction)?;
+        }
+        transaction.commit()?;
         Ok(created)
     }
 
@@ -661,6 +857,98 @@ impl Store {
         rows.collect::<rusqlite::Result<Vec<_>>>()
             .map_err(Into::into)
     }
+}
+
+struct SqliteRetryDeadlinePersistence {
+    path: PathBuf,
+    owner: String,
+}
+
+impl SqliteRetryDeadlinePersistence {
+    fn connection(&self) -> Result<Connection> {
+        let connection = Connection::open(&self.path)
+            .with_context(|| format!("opening retry-deadline catalog {}", self.path.display()))?;
+        connection.execute_batch("PRAGMA busy_timeout = 5000;")?;
+        Ok(connection)
+    }
+}
+
+impl crate::wayback_request::RetryDeadlinePersistence for SqliteRetryDeadlinePersistence {
+    fn load_deadline(&mut self, now: i64) -> Result<Option<i64>> {
+        let mut connection = self.connection()?;
+        let transaction = connection.transaction_with_behavior(TransactionBehavior::Immediate)?;
+        ensure_refresh_owner(&transaction, &self.owner, now)?;
+        let value = transaction
+            .query_row(
+                "SELECT value FROM metadata WHERE key = ?1",
+                [WAYBACK_RETRY_DEADLINE_KEY],
+                |row| row.get::<_, String>(0),
+            )
+            .optional()?;
+        transaction.commit()?;
+        value
+            .map(|value| {
+                value
+                    .parse::<i64>()
+                    .context("invalid Wayback retry deadline")
+            })
+            .transpose()
+    }
+
+    fn save_deadline(&mut self, deadline: i64, now: i64) -> Result<()> {
+        let mut connection = self.connection()?;
+        let transaction = connection.transaction_with_behavior(TransactionBehavior::Immediate)?;
+        ensure_refresh_owner(&transaction, &self.owner, now)?;
+        transaction.execute(
+            "INSERT INTO metadata(key, value) VALUES (?1, ?2)
+             ON CONFLICT(key) DO UPDATE SET value = excluded.value",
+            params![WAYBACK_RETRY_DEADLINE_KEY, deadline.to_string()],
+        )?;
+        transaction.commit()?;
+        Ok(())
+    }
+
+    fn clear_if_due(&mut self, now: i64) -> Result<()> {
+        let mut connection = self.connection()?;
+        let transaction = connection.transaction_with_behavior(TransactionBehavior::Immediate)?;
+        ensure_refresh_owner(&transaction, &self.owner, now)?;
+        transaction.execute(
+            "DELETE FROM metadata WHERE key = ?1 AND CAST(value AS INTEGER) <= ?2",
+            params![WAYBACK_RETRY_DEADLINE_KEY, now],
+        )?;
+        transaction.commit()?;
+        Ok(())
+    }
+}
+
+fn ensure_refresh_owner(
+    transaction: &rusqlite::Transaction<'_>,
+    owner: &str,
+    now: i64,
+) -> Result<()> {
+    let active: bool = transaction.query_row(
+        "SELECT EXISTS(
+           SELECT 1 FROM metadata AS lease
+           JOIN metadata AS owner ON owner.key = 'refresh_lease_owner'
+           WHERE lease.key = 'refresh_lease_until' AND CAST(lease.value AS INTEGER) > ?1
+             AND owner.value = ?2
+         )",
+        params![now, owner],
+        |row| row.get(0),
+    )?;
+    if !active {
+        bail!("refresh lease lost while handling Wayback retry deadline");
+    }
+    Ok(())
+}
+
+fn bump_catalog_generation(connection: &Connection) -> Result<()> {
+    connection.execute(
+        "INSERT INTO metadata(key, value) VALUES (?1, '1')
+         ON CONFLICT(key) DO UPDATE SET value = CAST(CAST(metadata.value AS INTEGER) + 1 AS TEXT)",
+        [CATALOG_GENERATION_KEY],
+    )?;
+    Ok(())
 }
 
 fn read_saying(row: &rusqlite::Row<'_>) -> rusqlite::Result<Saying> {
@@ -1080,6 +1368,54 @@ mod tests {
         let seeds: Vec<NewSaying> =
             serde_json::from_str(include_str!("../data/seed.json")).unwrap();
         assert_eq!(conn.insert(&seeds).unwrap(), 0);
+    }
+
+    #[test]
+    fn identical_text_in_different_groups_is_preserved() {
+        let store = Store::open(Path::new(":memory:")).unwrap();
+        let first = NewSaying {
+            text: "Shared text".into(),
+            category: "paremia".into(),
+            language: "es".into(),
+            source: "cvc_wayback".into(),
+            source_url: "https://cvc.cervantes.es/a".into(),
+            original_url: None,
+            captured_at: None,
+            group_id: Some("cvc:1".into()),
+        };
+        let second = NewSaying {
+            group_id: Some("cvc:2".into()),
+            source_url: "https://cvc.cervantes.es/b".into(),
+            ..first.clone()
+        };
+
+        assert_eq!(store.insert(&[first, second]).unwrap(), 2);
+        assert_eq!(store.by_group("cvc:1").unwrap().len(), 1);
+        assert_eq!(store.by_group("cvc:2").unwrap().len(), 1);
+    }
+
+    #[test]
+    fn legacy_group_uniqueness_migration_preserves_rows_and_resets_bootstrap() {
+        let path = std::env::temp_dir().join(format!(
+            "refranero-group-migration-{}.sqlite3",
+            std::process::id()
+        ));
+        let _ = std::fs::remove_file(&path);
+        {
+            let connection = Connection::open(&path).unwrap();
+            connection.execute_batch("CREATE TABLE sayings (id INTEGER PRIMARY KEY, text TEXT NOT NULL, category TEXT NOT NULL, language TEXT NOT NULL, source TEXT NOT NULL, source_url TEXT NOT NULL, original_url TEXT, captured_at TEXT, group_id TEXT, UNIQUE(text, category, language, source)); CREATE INDEX idx_sayings_category_lang ON sayings(category, language); CREATE TABLE metadata (key TEXT PRIMARY KEY, value TEXT NOT NULL); INSERT INTO sayings VALUES (77, 'Legacy', 'paremia', 'es', 'cvc_wayback', 'https://example.org/a', 'https://example.org/original', '20200101000000', 'cvc:77'); INSERT INTO metadata VALUES ('wayback_bootstrap_complete', 'true'), ('wayback_cursor', 'Z');").unwrap();
+        }
+        let store = Store::open(&path).unwrap();
+        let row = store.get(77).unwrap().unwrap();
+        assert_eq!(row.entry.group_id.as_deref(), Some("cvc:77"));
+        assert_eq!(row.entry.captured_at.as_deref(), Some("20200101000000"));
+        assert_eq!(store.wayback_bootstrap_next().unwrap(), Some('A'));
+        assert_eq!(store.wayback_cursor().unwrap(), None);
+        let nullable = counted_entry("Nullable", "refran", "es");
+        assert_eq!(store.insert(std::slice::from_ref(&nullable)).unwrap(), 1);
+        assert_eq!(store.insert(&[nullable]).unwrap(), 0);
+        drop(store);
+        std::fs::remove_file(path).unwrap();
     }
 
     #[test]

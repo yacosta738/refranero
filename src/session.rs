@@ -56,8 +56,7 @@ pub struct Session<'a> {
     message: Option<String>,
     help: bool,
     stats: Option<StatsView>,
-    observed_refresh: Option<i64>,
-    observed_wayback: Option<i64>,
+    observed_generation: i64,
     observed_refresh_error: Option<i64>,
     pending_update_notice: bool,
     progress: Option<ProgressView>,
@@ -96,8 +95,7 @@ impl<'a> Session<'a> {
         ui_language: UiLanguage,
     ) -> Result<Self> {
         let options = presentation::detect(color_mode);
-        let observed_refresh = store.last_successful_refresh()?;
-        let observed_wayback = store.last_wayback_refresh()?;
+        let observed_generation = store.catalog_generation()?;
         let observed_refresh_error = store.refresh_error()?.map(|error| error.updated_at);
         let mut session = Self {
             store,
@@ -108,8 +106,7 @@ impl<'a> Session<'a> {
             message: None,
             help: false,
             stats: None,
-            observed_refresh,
-            observed_wayback,
+            observed_generation,
             observed_refresh_error,
             pending_update_notice: false,
             progress: None,
@@ -309,26 +306,35 @@ impl<'a> Session<'a> {
     }
 
     fn poll_generation(&mut self) {
-        let (Ok(virtual_latest), Ok(wayback_latest)) = (
-            self.store.last_successful_refresh(),
-            self.store.last_wayback_refresh(),
-        ) else {
+        let Ok(generation) = self.store.catalog_generation() else {
             return;
         };
-        if virtual_latest == self.observed_refresh && wayback_latest == self.observed_wayback {
+        if generation == self.observed_generation {
             return;
         }
         // Keep the old generation when the reload fails so the next poll retries it.
         if self.reload_variants().is_err() {
             return;
         }
-        self.observed_refresh = virtual_latest;
-        self.observed_wayback = wayback_latest;
-        if self.stats.is_some() {
+        // Do not acknowledge a write that committed while variants were being loaded.
+        if self.store.catalog_generation().ok() != Some(generation) {
+            return;
+        }
+        let refreshed_stats = if self.stats.is_some() {
             // The catalog grew under the open statistics screen: show the new numbers.
-            if let Ok(stats) = self.read_stats() {
-                self.stats = Some(stats);
+            match self.read_stats() {
+                Ok(stats) => Some(stats),
+                Err(_) => return,
             }
+        } else {
+            None
+        };
+        if self.store.catalog_generation().ok() != Some(generation) {
+            return;
+        }
+        self.observed_generation = generation;
+        if let Some(stats) = refreshed_stats {
+            self.stats = Some(stats);
         }
         if self.progress.is_some() {
             // Wait for the full update run (including subsequent phases) before announcing completion.
@@ -1083,6 +1089,23 @@ mod tests {
 
         writer.record_successful_refresh(1_700_000_000).unwrap();
         session.poll_refresh();
+        assert!(
+            session.message.is_none(),
+            "a timestamp alone is not catalog content"
+        );
+        writer
+            .insert(&[crate::domain::NewSaying {
+                text: "Parallel catalog addition".into(),
+                category: "refran".into(),
+                language: "es".into(),
+                source: "manual".into(),
+                source_url: "https://example.org/new".into(),
+                original_url: None,
+                captured_at: None,
+                group_id: None,
+            }])
+            .unwrap();
+        session.poll_refresh();
         assert_eq!(session.message.as_deref(), Some("Catálogo actualizado"));
         assert!(session.dirty);
 
@@ -1094,7 +1117,10 @@ mod tests {
         // A Wayback-only refresh must also be announced.
         writer.record_wayback_success('A', 1_700_000_500).unwrap();
         session.poll_refresh();
-        assert_eq!(session.message.as_deref(), Some("Catálogo actualizado"));
+        assert!(
+            session.message.is_none(),
+            "successful-refresh markers do not imply content changes"
+        );
 
         drop(session);
         drop(writer);

@@ -146,13 +146,42 @@ where
         };
         while let Some(letter) = store.wayback_bootstrap_next()? {
             let position = summary.letters_processed + 1;
-            summary.entries_processed += process_letter(store, letter, true, position)?;
-            store.record_wayback_bootstrap_success(letter, unix_timestamp())?;
+            match process_letter(store, letter, true, position) {
+                Ok(count) => {
+                    summary.entries_processed += count;
+                    store.record_wayback_bootstrap_success(letter, unix_timestamp())?;
+                }
+                Err(error) if is_unavailable_index(&error) => {
+                    store.record_wayback_bootstrap_unavailable(letter, unix_timestamp())?;
+                }
+                Err(error) => return Err(error),
+            }
             summary.letters_processed = position;
             on_complete(store, letter, true, position);
         }
+        // One bounded retry pass prevents a missing early capture from blocking later letters,
+        // while keeping unresolved letters durable for a future worker.
+        for letter in store.wayback_unresolved_letters()? {
+            match process_letter(store, letter, true, summary.letters_processed + 1) {
+                Ok(count) => {
+                    summary.entries_processed += count;
+                    store.clear_wayback_unresolved(letter)?;
+                }
+                Err(error) if is_unavailable_index(&error) => {}
+                Err(error) => return Err(error),
+            }
+        }
         Ok(summary)
     } else {
+        // Revisit previously unavailable indexes once per worker before the normal incremental
+        // letter. A still-missing capture remains queued without blocking incremental progress.
+        for letter in store.wayback_unresolved_letters()? {
+            match process_letter(store, letter, true, 1) {
+                Ok(_) => store.clear_wayback_unresolved(letter)?,
+                Err(error) if is_unavailable_index(&error) => {}
+                Err(error) => return Err(error),
+            }
+        }
         let letter = crate::refresh::next_letter(store.wayback_cursor()?);
         let entries_processed = process_letter(store, letter, false, 1)?;
         store.record_wayback_success(letter, unix_timestamp())?;
@@ -162,6 +191,12 @@ where
             entries_processed,
         })
     }
+}
+
+fn is_unavailable_index(error: &anyhow::Error) -> bool {
+    error
+        .chain()
+        .any(|cause| cause.is::<crate::ingest::UnavailableWaybackIndex>())
 }
 
 fn unix_timestamp() -> i64 {
@@ -349,6 +384,30 @@ mod tests {
         assert_eq!(processed.entries_processed, 1);
         assert_eq!(calls, vec![('A', false, 1)]);
         assert_eq!(store.wayback_cursor().unwrap(), Some('A'));
+    }
+
+    #[test]
+    fn unavailable_bootstrap_letter_does_not_block_later_letters_and_is_retried_once() {
+        let mut store = Store::open(std::path::Path::new(":memory:")).unwrap();
+        let mut calls = Vec::new();
+        let result = run_wayback_updates(
+            &mut store,
+            |_, letter, _, _| {
+                calls.push(letter);
+                if letter == 'A' && calls.iter().filter(|item| **item == 'A').count() == 1 {
+                    return Err(anyhow::Error::new(crate::ingest::UnavailableWaybackIndex));
+                }
+                Ok(0)
+            },
+            |_, _, _, _| {},
+        )
+        .unwrap();
+        assert_eq!(result.letters_processed, 26);
+        assert_eq!(calls.first(), Some(&'A'));
+        assert_eq!(calls[25], 'Z');
+        assert_eq!(calls[26], 'A');
+        assert!(store.wayback_unresolved_letters().unwrap().is_empty());
+        assert_eq!(store.wayback_bootstrap_next().unwrap(), None);
     }
 
     #[test]
