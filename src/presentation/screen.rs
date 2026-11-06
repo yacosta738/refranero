@@ -245,7 +245,10 @@ fn stats_section(
             line.push_str(&format!("  {bar}"));
         }
         if show_percent {
-            let percent = (count * 100).checked_div(reference).unwrap_or(0).min(100);
+            let percent = ((*count as u128 * 100 + reference as u128 / 2)
+                .checked_div(reference as u128)
+                .unwrap_or(0)
+                .min(100)) as usize;
             line.push_str(&format!("  {percent:>3}%"));
         }
         lines.push(theme.meta(&line));
@@ -715,6 +718,22 @@ mod tests {
         assert!(frame.contains("Español"), "{frame}");
         assert_fits(&frame, 80);
         assert_exact_height(&frame, 24);
+    }
+
+    #[test]
+    fn statistics_percentages_round_to_the_nearest_whole_number() {
+        let entry = saying("A quien madruga, Dios le ayuda.");
+        let mut options = screen(&entry, 80, 24);
+        options.stats = Some(super::StatsView {
+            total: 1324,
+            categories: vec![("small".to_owned(), 7), ("larger".to_owned(), 89)],
+            languages: Vec::new(),
+        });
+
+        let frame = compose(&options);
+
+        assert!(frame.contains("  1%"), "{frame}");
+        assert!(frame.contains("  7%"), "{frame}");
     }
 
     #[test]
