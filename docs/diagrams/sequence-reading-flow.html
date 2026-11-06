@@ -112,21 +112,26 @@
   <p class="eyebrow">Refranero CLI · Reading flow</p>
   <h1>What happens when you run it</h1>
   <p class="subtitle">
-    Interactive startup reads from the local catalog first, then may schedule background refresh
-    work. A five-minute lease prevents overlapping workers; the reader does not wait for refresh.
+    Interactive startup may schedule refresh before reading and displaying the first local entry;
+    one-shot random output prints first, then may schedule refresh. A five-minute lease usually
+    prevents overlapping workers, but a worker delayed beyond lease expiry may overlap a new worker.
+    The reader does not wait for refresh.
   </p>
 
   <div class="diagram">
-    <svg viewBox="0 0 960 536" role="img" aria-labelledby="seq-title seq-desc">
+    <svg viewBox="0 0 960 980" role="img" aria-labelledby="seq-title seq-desc">
       <title id="seq-title">Refranero reading session sequence</title>
       <desc id="seq-desc">
-        The user starts the interactive reader. The CLI reads a random saying from the local SQLite
-        store and displays it. At startup, if online and refresh policy says work is due, the CLI
-        tries to acquire a refresh lease and starts a detached worker. Interactive startup may begin
-        a persistent Wayback bootstrap across letters A through Z; later updates process one letter.
-        The worker calls a remote source and writes results to the store. One-shot random output may
-        schedule ordinary refresh work but does not start Wayback bootstrap. In the reader, u requests
-        an update and s opens or closes catalog statistics.
+        Interactive startup checks online refresh eligibility, tries the five-minute lease when
+        work is due or Wayback bootstrap is pending, and may spawn a detached worker before reading
+        and displaying the first local entry. One-shot random output reads and prints first, then
+        may acquire the lease and spawn a worker for due Cervantes Virtual work. Offline commands,
+        no eligible work, a held lease, or a failed spawn start no worker. The lease usually prevents
+        overlap, but a worker delayed past expiry may overlap a newly started worker. Interactive
+        startup may bootstrap A through Z or resume multiple remaining letters through Z; only
+        updates after bootstrap completion process one letter. Workers fetch pages and persist
+        entries and progress. One-shot output never starts Wayback bootstrap. In the reader, u
+        requests an update and s toggles catalog statistics.
       </desc>
       <defs>
         <marker id="sarrow" viewBox="0 0 10 10" refX="8" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
@@ -144,7 +149,7 @@
       </g>
       <g>
         <rect x="224" y="24" width="140" height="40" rx="6" fill="#393e53" stroke="#f5f5f5" stroke-width="1" />
-        <text x="294" y="48" fill="#f5f5f5" font-size="13" font-weight="600" font-family="'Geist', sans-serif" text-anchor="middle">Session</text>
+        <text x="294" y="48" fill="#f5f5f5" font-size="13" font-weight="600" font-family="'Geist', sans-serif" text-anchor="middle">CLI / Session</text>
       </g>
       <g>
         <rect x="444" y="24" width="140" height="40" rx="6" fill="#393e53" stroke="#f08a59" stroke-width="1.2" />
@@ -159,101 +164,91 @@
         <text x="876" y="48" fill="#f5f5f5" font-size="12" font-weight="600" font-family="'Geist', sans-serif" text-anchor="middle">Remote Source</text>
       </g>
 
-      <!-- Lifelines -->
-      <line x1="84" y1="64" x2="84" y2="512" stroke="#bfc0c0" stroke-width="0.8" stroke-dasharray="3,3" />
-      <line x1="294" y1="64" x2="294" y2="512" stroke="#bfc0c0" stroke-width="0.8" stroke-dasharray="3,3" />
-      <line x1="514" y1="64" x2="514" y2="512" stroke="#bfc0c0" stroke-width="0.8" stroke-dasharray="3,3" />
-      <line x1="734" y1="64" x2="734" y2="512" stroke="#bfc0c0" stroke-width="0.8" stroke-dasharray="3,3" />
-      <line x1="876" y1="64" x2="876" y2="336" stroke="#bfc0c0" stroke-width="0.8" stroke-dasharray="3,3" />
-
-      <!-- Activation bars -->
-      <rect x="290" y="92" width="8" height="396" fill="#393e53" stroke="#bfc0c0" stroke-width="0.8" />
-      <rect x="510" y="112" width="8" height="40" fill="#393e53" stroke="#f08a59" stroke-width="0.8" />
-      <rect x="730" y="252" width="8" height="140" fill="#393e53" stroke="#bfc0c0" stroke-width="0.8" />
-      <rect x="872" y="292" width="8" height="40" fill="#393e53" stroke="#bfc0c0" stroke-width="0.8" />
-      <rect x="510" y="332" width="8" height="32" fill="#393e53" stroke="#bfc0c0" stroke-width="0.8" />
-
-      <!-- 1. User runs command -->
-      <path d="M 84,92 H 290" fill="none" stroke="#bfc0c0" stroke-width="1.2" marker-end="url(#sarrow)" />
-      <rect x="110" y="78" width="146" height="12" rx="2" fill="#2d3142" />
-      <text x="183" y="88" fill="#f5f5f5" font-size="10" font-family="'Geist Mono', monospace" text-anchor="middle">interactive start</text>
-
-      <!-- 2. Session -> Store: read random -->
-      <path d="M 298,112 H 510" fill="none" stroke="#f08a59" stroke-width="1.2" marker-end="url(#sarrow-coral)" />
-      <rect x="356" y="98" width="96" height="12" rx="2" fill="#2d3142" />
-      <text x="404" y="108" fill="#f08a59" font-size="10" font-family="'Geist Mono', monospace" text-anchor="middle">SELECT random row</text>
-
-      <!-- 3. Store -> Session: return -->
-      <path d="M 510,144 H 298" fill="none" stroke="#bfc0c0" stroke-width="1" stroke-dasharray="4,3" marker-end="url(#sarrow)" />
-      <rect x="356" y="130" width="96" height="12" rx="2" fill="#2d3142" />
-      <text x="404" y="140" fill="#bfc0c0" font-size="10" font-family="'Geist Mono', monospace" text-anchor="middle">one saying</text>
-
-      <!-- 4. Session -> User: print -->
-      <path d="M 290,176 H 92" fill="none" stroke="#f08a59" stroke-width="1.2" marker-end="url(#sarrow-coral)" />
-      <rect x="110" y="162" width="166" height="12" rx="2" fill="#2d3142" />
-      <text x="193" y="172" fill="#f08a59" font-size="10" font-family="'Geist Mono', monospace" text-anchor="middle">print to terminal — done</text>
-
-      <!-- Combined fragment: stale cache check -->
-      <rect x="276" y="196" width="612" height="292" rx="4" fill="none" stroke="#bfc0c0" stroke-width="0.8" />
-      <path d="M 276,196 H 356 V 206 H 346 L 336 216 H 276 Z" fill="#393e53" stroke="#bfc0c0" stroke-width="0.8" />
-      <text x="286" y="208" fill="#f5f5f5" font-size="9" font-weight="600" font-family="'Geist Mono', monospace">ALT</text>
-      <text x="366" y="208" fill="#bfc0c0" font-size="9" font-family="'Geist', sans-serif">online; refresh due or interactive Wayback bootstrap pending</text>
-
-      <!-- 5. Session -> Store: try to acquire refresh lease -->
-      <path d="M 298,236 H 510" fill="none" stroke="#bfc0c0" stroke-width="1.2" marker-end="url(#sarrow)" />
-      <rect x="330" y="222" width="158" height="12" rx="2" fill="#2d3142" />
-      <text x="409" y="232" fill="#f5f5f5" font-size="10" font-family="'Geist Mono', monospace" text-anchor="middle">acquire 5-minute lease</text>
-
-      <!-- 6. Store -> Session: lease acquired -->
-      <path d="M 510,252 H 298" fill="none" stroke="#bfc0c0" stroke-width="1" stroke-dasharray="4,3" marker-end="url(#sarrow)" />
-      <rect x="356" y="238" width="96" height="12" rx="2" fill="#2d3142" />
-      <text x="404" y="248" fill="#bfc0c0" font-size="10" font-family="'Geist Mono', monospace" text-anchor="middle">lease acquired</text>
-
-      <!-- 7. Session spawns worker -->
-      <path d="M 298,292 H 730" fill="none" stroke="#bfc0c0" stroke-width="1" stroke-dasharray="4,3" marker-end="url(#sarrow)" />
-      <rect x="440" y="278" width="150" height="12" rx="2" fill="#2d3142" />
-      <text x="515" y="288" fill="#bfc0c0" font-size="10" font-family="'Geist Mono', monospace" text-anchor="middle">spawn detached worker</text>
-
-      <!-- 8. Worker -> Remote: fetch -->
-      <path d="M 738,308 H 872" fill="none" stroke="#bfc0c0" stroke-width="1.2" marker-end="url(#sarrow)" />
-      <rect x="760" y="294" width="90" height="12" rx="2" fill="#2d3142" />
-      <text x="805" y="304" fill="#f5f5f5" font-size="10" font-family="'Geist Mono', monospace" text-anchor="middle">HTTP GET page</text>
-
-      <!-- 9. Remote -> Worker: return -->
-      <path d="M 872,340 H 738" fill="none" stroke="#bfc0c0" stroke-width="1" stroke-dasharray="4,3" marker-end="url(#sarrow)" />
-      <rect x="760" y="326" width="90" height="12" rx="2" fill="#2d3142" />
-      <text x="805" y="336" fill="#bfc0c0" font-size="10" font-family="'Geist Mono', monospace" text-anchor="middle">HTML page</text>
-
-      <!-- 10. Worker -> Store: write -->
-      <path d="M 730,372 H 518" fill="none" stroke="#bfc0c0" stroke-width="1.2" marker-end="url(#sarrow)" />
-      <rect x="560" y="358" width="110" height="12" rx="2" fill="#2d3142" />
-      <text x="615" y="368" fill="#f5f5f5" font-size="10" font-family="'Geist Mono', monospace" text-anchor="middle">INSERT new sayings</text>
-
-      <!-- else: offline, fresh, lease not acquired, or spawn failed -->
-      <line x1="276" y1="400" x2="888" y2="400" stroke="#bfc0c0" stroke-width="0.8" stroke-dasharray="4,3" />
-      <text x="286" y="414" fill="#bfc0c0" font-size="9" font-weight="600" font-family="'Geist Mono', monospace">[ELSE]</text>
-      <text x="356" y="414" fill="#bfc0c0" font-size="9" font-family="'Geist', sans-serif">offline, no work due, lease held, or spawn failed</text>
-
-      <!-- 11. no-op -->
-      <path d="M 510,448 H 302 Q 294,448 294,456 V 460 Q 294,468 302,468 H 440" fill="none" stroke="#8e98ac" stroke-width="1" stroke-dasharray="2,3" marker-end="url(#sarrow)" />
-      <rect x="320" y="450" width="150" height="12" rx="2" fill="#2d3142" />
-      <text x="395" y="460" fill="#8e98ac" font-size="10" font-family="'Geist Mono', monospace" text-anchor="middle">no refresh scheduled</text>
-
+      <!-- Lifelines and ordered startup branches -->
+      <line x1="84" y1="64" x2="84" y2="940" stroke="#bfc0c0" stroke-width="0.8" stroke-dasharray="3,3" />
+      <line x1="294" y1="64" x2="294" y2="940" stroke="#bfc0c0" stroke-width="0.8" stroke-dasharray="3,3" />
+      <line x1="514" y1="64" x2="514" y2="940" stroke="#bfc0c0" stroke-width="0.8" stroke-dasharray="3,3" />
+      <line x1="734" y1="64" x2="734" y2="940" stroke="#bfc0c0" stroke-width="0.8" stroke-dasharray="3,3" />
+      <line x1="876" y1="64" x2="876" y2="940" stroke="#bfc0c0" stroke-width="0.8" stroke-dasharray="3,3" />
+      <rect x="24" y="80" width="912" height="584" rx="4" fill="none" stroke="#bfc0c0" />
+      <text x="34" y="98" fill="#bfc0c0" font-size="10" font-family="'Geist Mono', monospace">ALT · interactive startup</text>
+      <path d="M 84,124 H 294" fill="none" stroke="#bfc0c0" stroke-width="1.2" marker-end="url(#sarrow)" />
+      <rect x="151.0" y="109" width="76.0" height="13" fill="#2d3142" />
+      <text x="189.0" y="119" text-anchor="middle" fill="#bfc0c0" font-size="10" font-family="'Geist Mono', monospace">start reader</text>
+      <text x="310" y="148" fill="#bfc0c0" font-size="9" font-family="'Geist Mono', monospace">If online and refresh due or Wayback bootstrap pending:</text>
+      <path d="M 294,176 H 514" fill="none" stroke="#bfc0c0" stroke-width="1.2" marker-end="url(#sarrow)" />
+      <rect x="349.5" y="161" width="109.0" height="13" fill="#2d3142" />
+      <text x="404.0" y="171" text-anchor="middle" fill="#bfc0c0" font-size="10" font-family="'Geist Mono', monospace">try 5-minute lease</text>
+      <path d="M 514,204 H 294" fill="none" stroke="#bfc0c0" stroke-width="1.2" stroke-dasharray="4,3" marker-end="url(#sarrow)" />
+      <rect x="355.0" y="189" width="98.0" height="13" fill="#2d3142" />
+      <text x="404.0" y="199" text-anchor="middle" fill="#bfc0c0" font-size="10" font-family="'Geist Mono', monospace">acquired or held</text>
+      <path d="M 294,232 H 734" fill="none" stroke="#bfc0c0" stroke-width="1.2" stroke-dasharray="4,3" marker-end="url(#sarrow)" />
+      <rect x="418.25" y="217" width="191.5" height="13" fill="#2d3142" />
+      <text x="514.0" y="227" text-anchor="middle" fill="#bfc0c0" font-size="10" font-family="'Geist Mono', monospace">spawn detached worker if acquired</text>
+      <path d="M 294,264 H 514" fill="none" stroke="#f08a59" stroke-width="1.2" marker-end="url(#sarrow-coral)" />
+      <rect x="352.25" y="249" width="103.5" height="13" fill="#2d3142" />
+      <text x="404.0" y="259" text-anchor="middle" fill="#f08a59" font-size="10" font-family="'Geist Mono', monospace">SELECT random row</text>
+      <path d="M 514,292 H 294" fill="none" stroke="#bfc0c0" stroke-width="1.2" stroke-dasharray="4,3" marker-end="url(#sarrow)" />
+      <rect x="368.75" y="277" width="70.5" height="13" fill="#2d3142" />
+      <text x="404.0" y="287" text-anchor="middle" fill="#bfc0c0" font-size="10" font-family="'Geist Mono', monospace">local entry</text>
+      <path d="M 294,320 H 84" fill="none" stroke="#f08a59" stroke-width="1.2" marker-end="url(#sarrow-coral)" />
+      <rect x="148.25" y="305" width="81.5" height="13" fill="#2d3142" />
+      <text x="189.0" y="315" text-anchor="middle" fill="#f08a59" font-size="10" font-family="'Geist Mono', monospace">display entry</text>
+      <line x1="24" y1="344" x2="936" y2="344" stroke="#bfc0c0" stroke-dasharray="4,3" />
+      <text x="34" y="366" fill="#bfc0c0" font-size="10" font-family="'Geist Mono', monospace">ELSE · one-shot random output</text>
+      <path d="M 84,396 H 294" fill="none" stroke="#bfc0c0" stroke-width="1.2" marker-end="url(#sarrow)" />
+      <rect x="145.5" y="381" width="87.0" height="13" fill="#2d3142" />
+      <text x="189.0" y="391" text-anchor="middle" fill="#bfc0c0" font-size="10" font-family="'Geist Mono', monospace">random command</text>
+      <path d="M 294,428 H 514" fill="none" stroke="#f08a59" stroke-width="1.2" marker-end="url(#sarrow-coral)" />
+      <rect x="352.25" y="413" width="103.5" height="13" fill="#2d3142" />
+      <text x="404.0" y="423" text-anchor="middle" fill="#f08a59" font-size="10" font-family="'Geist Mono', monospace">SELECT random row</text>
+      <path d="M 514,456 H 294" fill="none" stroke="#bfc0c0" stroke-width="1.2" stroke-dasharray="4,3" marker-end="url(#sarrow)" />
+      <rect x="368.75" y="441" width="70.5" height="13" fill="#2d3142" />
+      <text x="404.0" y="451" text-anchor="middle" fill="#bfc0c0" font-size="10" font-family="'Geist Mono', monospace">local entry</text>
+      <path d="M 294,484 H 84" fill="none" stroke="#f08a59" stroke-width="1.2" marker-end="url(#sarrow-coral)" />
+      <rect x="153.75" y="469" width="70.5" height="13" fill="#2d3142" />
+      <text x="189.0" y="479" text-anchor="middle" fill="#f08a59" font-size="10" font-family="'Geist Mono', monospace">print entry</text>
+      <text x="310" y="512" fill="#bfc0c0" font-size="9" font-family="'Geist Mono', monospace">If output succeeded, online, and Cervantes Virtual refresh due:</text>
+      <path d="M 294,544 H 514" fill="none" stroke="#bfc0c0" stroke-width="1.2" marker-end="url(#sarrow)" />
+      <rect x="349.5" y="529" width="109.0" height="13" fill="#2d3142" />
+      <text x="404.0" y="539" text-anchor="middle" fill="#bfc0c0" font-size="10" font-family="'Geist Mono', monospace">try 5-minute lease</text>
+      <path d="M 514,572 H 294" fill="none" stroke="#bfc0c0" stroke-width="1.2" stroke-dasharray="4,3" marker-end="url(#sarrow)" />
+      <rect x="355.0" y="557" width="98.0" height="13" fill="#2d3142" />
+      <text x="404.0" y="567" text-anchor="middle" fill="#bfc0c0" font-size="10" font-family="'Geist Mono', monospace">acquired or held</text>
+      <path d="M 294,600 H 734" fill="none" stroke="#bfc0c0" stroke-width="1.2" stroke-dasharray="4,3" marker-end="url(#sarrow)" />
+      <rect x="418.25" y="585" width="191.5" height="13" fill="#2d3142" />
+      <text x="514.0" y="595" text-anchor="middle" fill="#bfc0c0" font-size="10" font-family="'Geist Mono', monospace">spawn detached worker if acquired</text>
+      <text x="310" y="636" fill="#bfc0c0" font-size="9" font-family="'Geist Mono', monospace">No Wayback bootstrap in one-shot output.</text>
+      <rect x="276" y="684" width="660" height="240" rx="4" fill="none" stroke="#bfc0c0" />
+      <text x="286" y="706" fill="#bfc0c0" font-size="9" font-family="'Geist Mono', monospace">ALT · worker started (eligible work, lease acquired, spawn succeeded)</text>
+      <text x="310" y="730" fill="#bfc0c0" font-size="9" font-family="'Geist Mono', monospace">Worker runs independently; display never waits for network.</text>
+      <path d="M 734,764 H 876" fill="none" stroke="#bfc0c0" stroke-width="1.2" marker-end="url(#sarrow)" />
+      <rect x="769.75" y="749" width="70.5" height="13" fill="#2d3142" />
+      <text x="805.0" y="759" text-anchor="middle" fill="#bfc0c0" font-size="10" font-family="'Geist Mono', monospace">fetch pages</text>
+      <path d="M 876,796 H 734" fill="none" stroke="#bfc0c0" stroke-width="1.2" stroke-dasharray="4,3" marker-end="url(#sarrow)" />
+      <rect x="775.25" y="781" width="59.5" height="13" fill="#2d3142" />
+      <text x="805.0" y="791" text-anchor="middle" fill="#bfc0c0" font-size="10" font-family="'Geist Mono', monospace">page data</text>
+      <path d="M 734,828 H 514" fill="none" stroke="#bfc0c0" stroke-width="1.2" marker-end="url(#sarrow)" />
+      <rect x="550.25" y="813" width="147.5" height="13" fill="#2d3142" />
+      <text x="624.0" y="823" text-anchor="middle" fill="#bfc0c0" font-size="10" font-family="'Geist Mono', monospace">save entries and progress</text>
+      <line x1="276" y1="852" x2="936" y2="852" stroke="#bfc0c0" stroke-dasharray="4,3" />
+      <text x="286" y="874" fill="#bfc0c0" font-size="9" font-family="'Geist Mono', monospace">ELSE · offline, no eligible work, lease held, or spawn failed</text>
+      <text x="310" y="902" fill="#bfc0c0" font-size="10" font-family="'Geist Mono', monospace">No worker started; use local catalog.</text>
       <!-- Legend -->
-      <line x1="24" y1="512" x2="936" y2="512" stroke="rgba(245,245,245,0.10)" stroke-width="0.8" />
-      <text x="24" y="528" fill="#bfc0c0" font-size="8" font-family="'Geist Mono', monospace" letter-spacing="0.14em">LEGEND</text>
+      <line x1="24" y1="944" x2="936" y2="944" stroke="rgba(245,245,245,0.10)" stroke-width="0.8" />
+      <text x="24" y="960" fill="#bfc0c0" font-size="8" font-family="'Geist Mono', monospace" letter-spacing="0.14em">LEGEND</text>
 
-      <line x1="130" y1="524" x2="158" y2="524" stroke="#bfc0c0" stroke-width="1.2" marker-end="url(#sarrow)" />
-      <text x="166" y="528" fill="#bfc0c0" font-size="10" font-family="'Geist', sans-serif">Call</text>
+      <line x1="130" y1="956" x2="158" y2="956" stroke="#bfc0c0" stroke-width="1.2" marker-end="url(#sarrow)" />
+      <text x="166" y="960" fill="#bfc0c0" font-size="10" font-family="'Geist', sans-serif">Call</text>
 
-      <line x1="230" y1="524" x2="258" y2="524" stroke="#bfc0c0" stroke-width="1" stroke-dasharray="4,3" marker-end="url(#sarrow)" />
-      <text x="266" y="528" fill="#bfc0c0" font-size="10" font-family="'Geist', sans-serif">Return / async</text>
+      <line x1="230" y1="956" x2="258" y2="956" stroke="#bfc0c0" stroke-width="1" stroke-dasharray="4,3" marker-end="url(#sarrow)" />
+      <text x="266" y="960" fill="#bfc0c0" font-size="10" font-family="'Geist', sans-serif">Return / async</text>
 
-      <line x1="404" y1="524" x2="432" y2="524" stroke="#f08a59" stroke-width="1.2" marker-end="url(#sarrow-coral)" />
-      <text x="440" y="528" fill="#bfc0c0" font-size="10" font-family="'Geist', sans-serif">Critical path (blocking, fast)</text>
+      <line x1="404" y1="956" x2="432" y2="956" stroke="#f08a59" stroke-width="1.2" marker-end="url(#sarrow-coral)" />
+      <text x="440" y="960" fill="#bfc0c0" font-size="10" font-family="'Geist', sans-serif">Critical path (blocking, fast)</text>
 
-      <rect x="684" y="518" width="80" height="12" rx="2" fill="none" stroke="#bfc0c0" stroke-width="0.8" />
-      <text x="772" y="528" fill="#bfc0c0" font-size="10" font-family="'Geist', sans-serif">Combined fragment (alt)</text>
+      <rect x="684" y="950" width="80" height="12" rx="2" fill="none" stroke="#bfc0c0" stroke-width="0.8" />
+      <text x="772" y="960" fill="#bfc0c0" font-size="10" font-family="'Geist', sans-serif">Combined fragment (alt)</text>
     </svg>
   </div>
 
@@ -269,11 +264,11 @@
     <div class="card">
       <div class="card-header"><span class="card-dot muted"></span><h3>Background path — kept out of your way</h3></div>
       <ul>
-        <li>Interactive startup may schedule a Wayback bootstrap, which processes letters A–Z. Later update runs process one letter.</li>
-        <li>It takes a time-boxed lease, so two overlapping runs cannot race each other.</li>
+        <li>Interactive startup may start bootstrap A–Z or resume multiple remaining letters through Z. Only updates after bootstrap completion process one letter.</li>
+        <li>The five-minute lease usually prevents overlapping workers. A worker delayed beyond lease expiry may overlap with a newly started worker.</li>
         <li>If another process already holds the lease, this run skips the refresh entirely.</li>
         <li><code>--offline</code> disables this path entirely for that invocation.</li>
-        <li>One-shot random output does not start Wayback bootstrap. In the reader, <code>u</code> requests an update and <code>s</code> toggles catalog statistics.</li>
+        <li>One-shot random output prints first, then may schedule a due Cervantes Virtual refresh; it does not start Wayback bootstrap. In the reader, <code>u</code> requests an update and <code>s</code> toggles catalog statistics.</li>
       </ul>
     </div>
   </div>

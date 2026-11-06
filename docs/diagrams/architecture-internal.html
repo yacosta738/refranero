@@ -169,14 +169,15 @@
   </p>
 
   <div class="plate">
-    <svg viewBox="0 0 1240 780" role="img" aria-labelledby="arch-int-title arch-int-desc">
+    <svg viewBox="0 0 1240 860" role="img" aria-labelledby="arch-int-title arch-int-desc">
       <title id="arch-int-title">Refranero internal module architecture</title>
       <desc id="arch-int-desc">
         Three stacked bands. The terminal layer holds the CLI entry point and the interactive
         reader. The core engine holds the local SQLite catalog, update orchestration, refresh policy,
         and ingest adapters. The external sources band holds Cervantes Virtual and the Wayback
         Machine, which only the adapters contact. The interactive reader reads the catalog along the
-        focal path and starts background update orchestration; main.rs runs the worker callbacks,
+        focal path and requests manual background updates; the CLI schedules automatic refresh
+        directly, including after one-shot output, and explicit sync calls the adapters directly; main.rs runs the worker callbacks,
         update.rs selects source work and drives the persistent Wayback letter state machine, and
         refresh.rs defines cadence and limits. The adapters fetch remote pages and the worker
         persists imported records back into the catalog.
@@ -201,14 +202,14 @@
       <text x="66" y="79" fill="#8e98ac" font-size="9" font-family="'Geist Mono', monospace" letter-spacing="0.12em">TERMINAL LAYER</text>
 
       <!-- Band B: core engine -->
-      <rect x="48" y="264" width="1144" height="200" rx="8" fill="rgba(245,245,245,0.02)" stroke="rgba(245,245,245,0.12)" stroke-width="0.9" />
+      <rect x="48" y="264" width="1144" height="280" rx="8" fill="rgba(245,245,245,0.02)" stroke="rgba(245,245,245,0.12)" stroke-width="0.9" />
       <rect x="62" y="268" width="104" height="15" rx="2" fill="#2d3142" />
       <text x="66" y="279" fill="#8e98ac" font-size="9" font-family="'Geist Mono', monospace" letter-spacing="0.12em">CORE ENGINE</text>
 
       <!-- Band C: external sources -->
-      <rect x="48" y="512" width="1144" height="176" rx="8" fill="rgba(245,245,245,0.02)" stroke="rgba(142,152,172,0.35)" stroke-width="0.9" stroke-dasharray="5,4" />
-      <rect x="62" y="516" width="134" height="15" rx="2" fill="#2d3142" />
-      <text x="66" y="527" fill="#8e98ac" font-size="9" font-family="'Geist Mono', monospace" letter-spacing="0.12em">EXTERNAL SOURCES</text>
+      <rect x="48" y="592" width="1144" height="176" rx="8" fill="rgba(245,245,245,0.02)" stroke="rgba(142,152,172,0.35)" stroke-width="0.9" stroke-dasharray="5,4" />
+      <rect x="62" y="596" width="134" height="15" rx="2" fill="#2d3142" />
+      <text x="66" y="607" fill="#8e98ac" font-size="9" font-family="'Geist Mono', monospace" letter-spacing="0.12em">EXTERNAL SOURCES</text>
 
       <!-- ============ Connectors (drawn before nodes) ============ -->
 
@@ -217,15 +218,20 @@
       <rect x="372" y="122" width="88" height="12" rx="2" fill="#2d3142" />
       <text x="416" y="131" fill="#bfc0c0" font-size="9.5" font-family="'Geist Mono', monospace" text-anchor="middle" letter-spacing="0.06em">DISPATCH</text>
 
+      <!-- Direct CLI paths: automatic random refresh and explicit sync -->
+      <path d="M 336,112 V 92 H 996 V 104" fill="none" stroke="#bfc0c0" stroke-dasharray="5,4" marker-end="url(#ai-arrow)" />
+      <text x="800" y="88" fill="#bfc0c0" font-size="9" text-anchor="middle">SCHEDULE REFRESH (INCLUDING ONE-SHOT)</text>
+      <path d="M 336,164 H 400 V 244 H 1080 V 304" fill="none" stroke="#bfc0c0" marker-end="url(#ai-arrow)" />
+      <text x="940" y="240" fill="#bfc0c0" font-size="9">EXPLICIT SYNC</text>
+      <path d="M 744,156 H 872" fill="none" stroke="#bfc0c0" stroke-dasharray="5,4" marker-end="url(#ai-arrow)" />
+      <text x="808" y="150" fill="#bfc0c0" font-size="9" text-anchor="middle">MANUAL UPDATE</text>
+      <path d="M 996,176 V 212 H 700 V 304" fill="none" stroke="#bfc0c0" marker-end="url(#ai-arrow)" />
+      <text x="790" y="208" fill="#bfc0c0" font-size="9">ORCHESTRATE</text>
+
       <!-- Interactive reader reads the catalog: focal path -->
       <path d="M 548,176 V 264 Q 548,272 540,272 H 252 Q 244,272 244,280 V 304" fill="none" stroke="#f08a59" stroke-width="1.6" marker-end="url(#ai-arrow-accent)" />
       <rect x="400" y="254" width="60" height="12" rx="2" fill="#2d3142" />
       <text x="430" y="263" fill="#f08a59" font-size="9.5" font-family="'Geist Mono', monospace" text-anchor="middle" letter-spacing="0.06em">READ</text>
-
-      <!-- Interactive reader spawns the background worker -->
-      <path d="M 620,176 V 304" fill="none" stroke="#bfc0c0" stroke-width="1.1" stroke-dasharray="5,4" marker-end="url(#ai-arrow)" />
-      <rect x="628" y="216" width="100" height="13" rx="2" fill="#2d3142" />
-      <text x="634" y="226" fill="#8e98ac" font-size="9.5" font-family="'Geist Mono', monospace" letter-spacing="0.06em">SPAWN</text>
 
       <!-- Worker runs an import through the adapters -->
       <path d="M 744,336 H 872" fill="none" stroke="#bfc0c0" stroke-width="1.3" marker-end="url(#ai-arrow)" />
@@ -233,22 +239,22 @@
       <text x="808" y="327" fill="#bfc0c0" font-size="9.5" font-family="'Geist Mono', monospace" text-anchor="middle" letter-spacing="0.06em">RUN</text>
 
       <!-- Adapters hand parsed records back to the caller -->
-      <path d="M 872,380 H 744" fill="none" stroke="#bfc0c0" stroke-width="1.1" stroke-dasharray="5,4" marker-end="url(#ai-arrow)" />
-      <rect x="772" y="362" width="72" height="12" rx="2" fill="#2d3142" />
-      <text x="808" y="371" fill="#8e98ac" font-size="9.5" font-family="'Geist Mono', monospace" text-anchor="middle" letter-spacing="0.06em">RECORDS</text>
+      <path d="M 1120,380 H 1152 V 140 H 1120" fill="none" stroke="#bfc0c0" stroke-width="1.1" stroke-dasharray="5,4" marker-end="url(#ai-arrow)" />
+      <rect x="1128" y="238" width="60" height="12" rx="2" fill="#2d3142" />
+      <text x="1150" y="248" fill="#8e98ac" font-size="9.5" font-family="'Geist Mono', monospace" text-anchor="middle" letter-spacing="0.06em">RECORDS</text>
 
       <!-- Worker persists imported rows; catalog stays the single writer target -->
-      <path d="M 560,392 V 432 Q 560,440 552,440 H 252 Q 244,440 244,432 V 392" fill="none" stroke="#bfc0c0" stroke-width="1.1" stroke-dasharray="5,4" marker-end="url(#ai-arrow)" />
-      <rect x="376" y="422" width="56" height="12" rx="2" fill="#2d3142" />
-      <text x="404" y="431" fill="#8e98ac" font-size="9.5" font-family="'Geist Mono', monospace" text-anchor="middle" letter-spacing="0.06em">WRITE</text>
+      <path d="M 996,176 V 192 H 80 V 440 H 244 V 392" fill="none" stroke="#bfc0c0" stroke-width="1.1" stroke-dasharray="5,4" marker-end="url(#ai-arrow)" />
+      <rect x="136" y="422" width="56" height="12" rx="2" fill="#2d3142" />
+      <text x="164" y="431" fill="#8e98ac" font-size="9.5" font-family="'Geist Mono', monospace" text-anchor="middle" letter-spacing="0.06em">WRITE</text>
 
       <!-- Adapters fetch the thematic page index -->
-      <path d="M 912,392 V 516 Q 912,524 904,524 H 548 Q 540,524 540,532 V 552" fill="none" stroke="#6a95d8" stroke-width="1.3" marker-end="url(#ai-arrow-link)" />
+      <path d="M 912,392 V 596 Q 912,604 904,604 H 548 Q 540,604 540,612 V 632" fill="none" stroke="#6a95d8" stroke-width="1.3" marker-end="url(#ai-arrow-link)" />
       <rect x="812" y="458" width="94" height="13" rx="2" fill="#2d3142" />
       <text x="859" y="468" fill="#6a95d8" font-size="9.5" font-family="'Geist Mono', monospace" text-anchor="middle" letter-spacing="0.04em">FETCH PAGE</text>
 
       <!-- Adapters fetch the archived letter index -->
-      <path d="M 996,392 V 552" fill="none" stroke="#6a95d8" stroke-width="1.3" marker-end="url(#ai-arrow-link)" />
+      <path d="M 996,392 V 632" fill="none" stroke="#6a95d8" stroke-width="1.3" marker-end="url(#ai-arrow-link)" />
       <rect x="1004" y="458" width="110" height="13" rx="2" fill="#2d3142" />
       <text x="1059" y="468" fill="#6a95d8" font-size="9.5" font-family="'Geist Mono', monospace" text-anchor="middle" letter-spacing="0.04em">FETCH ARCHIVE</text>
 
@@ -267,6 +273,11 @@
       <text x="553" y="125" fill="#bfc0c0" font-size="8.5" font-family="'Geist Mono', monospace" text-anchor="middle" letter-spacing="0.08em">READER LOOP</text>
       <text x="620" y="148" fill="#f5f5f5" font-size="15" font-weight="600" font-family="'Geist', sans-serif" text-anchor="middle">Interactive Reader</text>
       <text x="620" y="166" fill="#8e98ac" font-size="11" font-family="'Geist Mono', monospace" text-anchor="middle">session.rs · presentation/</text>
+
+      <!-- Worker callbacks run in the CLI binary -->
+      <rect x="872" y="104" width="248" height="72" rx="6" fill="#393e53" stroke="#bfc0c0" />
+      <text x="996" y="138" fill="#f5f5f5" font-size="15" text-anchor="middle">Worker Callbacks</text>
+      <text x="996" y="160" fill="#8e98ac" font-size="11" text-anchor="middle">main.rs</text>
 
       <!-- Local catalog: focal node -->
       <rect x="120" y="304" width="248" height="88" rx="6" fill="#393e53" />
@@ -294,39 +305,39 @@
       <text x="996" y="383" fill="#8e98ac" font-size="10" font-family="'Geist Mono', monospace" text-anchor="middle">parse HTML into rows</text>
 
       <!-- Cervantes Virtual -->
-      <rect x="416" y="552" width="248" height="72" rx="6" fill="#393e53" stroke="#8e98ac" stroke-width="1" stroke-dasharray="5,4" />
-      <text x="540" y="584" fill="#f5f5f5" font-size="15" font-weight="600" font-family="'Geist', sans-serif" text-anchor="middle">Cervantes Virtual</text>
-      <text x="540" y="603" fill="#8e98ac" font-size="11" font-family="'Geist Mono', monospace" text-anchor="middle">thematic page index</text>
+      <rect x="416" y="632" width="248" height="72" rx="6" fill="#393e53" stroke="#8e98ac" stroke-width="1" stroke-dasharray="5,4" />
+      <text x="540" y="664" fill="#f5f5f5" font-size="15" font-weight="600" font-family="'Geist', sans-serif" text-anchor="middle">Cervantes Virtual</text>
+      <text x="540" y="683" fill="#8e98ac" font-size="11" font-family="'Geist Mono', monospace" text-anchor="middle">thematic page index</text>
 
       <!-- Wayback Machine -->
-      <rect x="872" y="552" width="248" height="72" rx="6" fill="#393e53" stroke="#8e98ac" stroke-width="1" stroke-dasharray="5,4" />
-      <text x="996" y="584" fill="#f5f5f5" font-size="15" font-weight="600" font-family="'Geist', sans-serif" text-anchor="middle">Wayback Machine</text>
-      <text x="996" y="603" fill="#8e98ac" font-size="11" font-family="'Geist Mono', monospace" text-anchor="middle">archived letter index</text>
+      <rect x="872" y="632" width="248" height="72" rx="6" fill="#393e53" stroke="#8e98ac" stroke-width="1" stroke-dasharray="5,4" />
+      <text x="996" y="664" fill="#f5f5f5" font-size="15" font-weight="600" font-family="'Geist', sans-serif" text-anchor="middle">Wayback Machine</text>
+      <text x="996" y="683" fill="#8e98ac" font-size="11" font-family="'Geist Mono', monospace" text-anchor="middle">archived letter index</text>
 
-      <!-- Refresh policy, read in the empty left area -->
-      <text x="96" y="572" fill="#8e98ac" font-size="9" font-family="'Geist Mono', monospace" letter-spacing="0.12em">POLICY · refresh.rs</text>
-      <text x="96" y="600" fill="#bfc0c0" font-size="12.5" font-family="'Instrument Serif', serif" font-style="italic">Daily portal; weekly Wayback.</text>
-      <text x="96" y="620" fill="#bfc0c0" font-size="12.5" font-family="'Instrument Serif', serif" font-style="italic">Five-minute worker lease.</text>
-      <text x="96" y="640" fill="#bfc0c0" font-size="12.5" font-family="'Instrument Serif', serif" font-style="italic">Incremental Wayback: ten-entry cap.</text>
+      <!-- Refresh policy, read in the core engine band -->
+      <text x="96" y="478" fill="#8e98ac" font-size="9" font-family="'Geist Mono', monospace" letter-spacing="0.12em">POLICY · refresh.rs</text>
+      <text x="96" y="498" fill="#bfc0c0" font-size="12.5" font-family="'Instrument Serif', serif" font-style="italic">Daily portal; weekly Wayback.</text>
+      <text x="96" y="518" fill="#bfc0c0" font-size="12.5" font-family="'Instrument Serif', serif" font-style="italic">Five-minute worker lease.</text>
+      <text x="96" y="538" fill="#bfc0c0" font-size="12.5" font-family="'Instrument Serif', serif" font-style="italic">Incremental Wayback: ten-entry cap.</text>
 
       <!-- Legend: bottom horizontal strip -->
-      <line x1="48" y1="706" x2="1192" y2="706" stroke="rgba(245,245,245,0.12)" stroke-width="0.9" />
-      <text x="48" y="730" fill="#8e98ac" font-size="9" font-family="'Geist Mono', monospace" letter-spacing="0.12em">LEGEND</text>
+      <line x1="48" y1="786" x2="1192" y2="786" stroke="rgba(245,245,245,0.12)" stroke-width="0.9" />
+      <text x="48" y="810" fill="#8e98ac" font-size="9" font-family="'Geist Mono', monospace" letter-spacing="0.12em">LEGEND</text>
 
-      <line x1="148" y1="726" x2="176" y2="726" stroke="#bfc0c0" stroke-width="1.3" marker-end="url(#ai-arrow)" />
-      <text x="184" y="730" fill="#bfc0c0" font-size="11" font-family="'Geist', sans-serif">Call or data path</text>
+      <line x1="148" y1="806" x2="176" y2="806" stroke="#bfc0c0" stroke-width="1.3" marker-end="url(#ai-arrow)" />
+      <text x="184" y="810" fill="#bfc0c0" font-size="11" font-family="'Geist', sans-serif">Call or data path</text>
 
-      <line x1="306" y1="726" x2="334" y2="726" stroke="#bfc0c0" stroke-width="1.1" stroke-dasharray="5,4" marker-end="url(#ai-arrow)" />
-      <text x="342" y="730" fill="#bfc0c0" font-size="11" font-family="'Geist', sans-serif">Background or async</text>
+      <line x1="306" y1="806" x2="334" y2="806" stroke="#bfc0c0" stroke-width="1.1" stroke-dasharray="5,4" marker-end="url(#ai-arrow)" />
+      <text x="342" y="810" fill="#bfc0c0" font-size="11" font-family="'Geist', sans-serif">Background or async</text>
 
-      <line x1="476" y1="726" x2="504" y2="726" stroke="#f08a59" stroke-width="1.6" marker-end="url(#ai-arrow-accent)" />
-      <text x="512" y="730" fill="#bfc0c0" font-size="11" font-family="'Geist', sans-serif">Default read, local-first</text>
+      <line x1="476" y1="806" x2="504" y2="806" stroke="#f08a59" stroke-width="1.6" marker-end="url(#ai-arrow-accent)" />
+      <text x="512" y="810" fill="#bfc0c0" font-size="11" font-family="'Geist', sans-serif">Default read, local-first</text>
 
-      <line x1="672" y1="726" x2="700" y2="726" stroke="#6a95d8" stroke-width="1.3" marker-end="url(#ai-arrow-link)" />
-      <text x="708" y="730" fill="#bfc0c0" font-size="11" font-family="'Geist', sans-serif">Remote HTTP fetch</text>
+      <line x1="672" y1="806" x2="700" y2="806" stroke="#6a95d8" stroke-width="1.3" marker-end="url(#ai-arrow-link)" />
+      <text x="708" y="810" fill="#bfc0c0" font-size="11" font-family="'Geist', sans-serif">Remote HTTP fetch</text>
 
-      <rect x="840" y="720" width="80" height="12" rx="2" fill="none" stroke="#8e98ac" stroke-width="0.9" stroke-dasharray="5,4" />
-      <text x="928" y="730" fill="#bfc0c0" font-size="11" font-family="'Geist', sans-serif">External boundary</text>
+      <rect x="840" y="800" width="80" height="12" rx="2" fill="none" stroke="#8e98ac" stroke-width="0.9" stroke-dasharray="5,4" />
+      <text x="928" y="810" fill="#bfc0c0" font-size="11" font-family="'Geist', sans-serif">External boundary</text>
     </svg>
   </div>
 

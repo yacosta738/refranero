@@ -551,10 +551,15 @@ Fonts; offline, each page uses the system font fallback.
 
 The architecture diagram is embedded here and matches its Mermaid source file.
 
+<!-- coderabbit-ai-generated:v1 -->
+
+<!-- coderabbit-ai-generated-section:v1:bf45d225d0311f7b823c474862d0a9ddfe80df3cfba0cf2604dc2006362d6a7b -->
+
 ```mermaid
 flowchart TB
     subgraph terminal[Terminal layer]
         main[CLI entry<br/>main.rs]
+        worker[Background worker callbacks<br/>main.rs]
         session[Interactive session<br/>session.rs and presentation/]
     end
 
@@ -572,17 +577,22 @@ flowchart TB
 
     main -->|dispatch| session
     session -->|read locally| catalog
-    session -.->|start background worker| update
+    session -.->|request manual background update| worker
+    main -.->|schedule refresh; one-shot random bypasses session| worker
+    main -->|explicit sync| ingest
+    worker -->|select and orchestrate work| update
     update -->|consult cadence and limits| policy
     update -->|run selected imports| ingest
     ingest -->|fetch current pages| virtual
     ingest -->|fetch archived index and fichas| wayback
-    ingest -.->|parsed records| update
-    update -.->|persist imported records| catalog
+    ingest -.->|parsed records| worker
+    worker -.->|persist imported records| catalog
 
     state[Wayback progress: bootstrap A-Z, then one letter per run]
     update --- state
 ```
+
+<!-- /coderabbit-ai-generated:v1 -->
 
 Mermaid source files:
 

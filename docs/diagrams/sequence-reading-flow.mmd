@@ -6,23 +6,37 @@ sequenceDiagram
     participant Sources as Cervantes Virtual / Wayback
 
     User->>CLI: Start interactive reader or one-shot random command
-    CLI->>Catalog: Read random entry
-    Catalog-->>CLI: Local entry
-    CLI-->>User: Display entry without waiting for network
+    alt Interactive startup
+        opt Online and refresh due or Wayback bootstrap pending
+            CLI->>Catalog: Try to acquire 5-minute refresh lease
+            Catalog-->>CLI: Lease acquired or already held
+            CLI-)Worker: Start detached worker only if lease was acquired
+        end
+        CLI->>Catalog: Read random entry
+        Catalog-->>CLI: Local entry
+        CLI-->>User: Display entry without waiting for network
+    else One-shot random output
+        CLI->>Catalog: Read random entry
+        Catalog-->>CLI: Local entry
+        CLI-->>User: Print entry without waiting for network
+        opt Successful output, online, and Cervantes Virtual refresh due
+            CLI->>Catalog: Try to acquire 5-minute refresh lease
+            Catalog-->>CLI: Lease acquired or already held
+            CLI-)Worker: Start detached worker only if lease was acquired
+        end
+    end
 
-    alt Interactive, online, and work is due or bootstrap is pending
-        CLI->>Catalog: Try to acquire 5-minute refresh lease
-        Catalog-->>CLI: Lease acquired or already held
-        CLI-)Worker: Start detached worker only if lease was acquired
+    alt Worker started: online, eligible work due, lease acquired, spawn succeeded
         Note over CLI,Worker: Reader remains responsive while refresh runs
         Worker->>Sources: Fetch selected source pages
         Sources-->>Worker: Return page data
         Worker->>Catalog: Save imported entries and progress
-        Worker-->>CLI: Publish progress and completion state
-    else One-shot output, offline, or no work due
-        Note over CLI,Catalog: Serve the entry from the local catalog; do not start a duplicate worker
+        Worker-->>CLI: Publish progress and completion state in catalog
+    else Offline, no eligible work due, lease held, or spawn failed
+        Note over CLI,Catalog: Serve the entry from the local catalog, no worker started
     end
 
-    Note over Worker,Sources: Interactive startup may bootstrap A-Z; later Wayback runs process one letter
+    Note over Worker,Catalog: Five-minute lease usually prevents overlap, a worker delayed past expiry may overlap a new worker
+    Note over Worker,Sources: Interactive startup may bootstrap A-Z, resumed bootstrap processes remaining letters through Z<br/>Only updates after bootstrap completion process one letter
     Note over CLI,Sources: One-shot output may refresh Cervantes Virtual when due, but never starts full Wayback bootstrap
-    Note over User,CLI: Reader keys: u requests a forced online update if a lease is available; s opens or closes catalog statistics
+    Note over User,CLI: Reader keys: u requests a forced online update if a lease is available, s opens or closes catalog statistics
