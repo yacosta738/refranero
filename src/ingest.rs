@@ -145,6 +145,17 @@ fn is_permanent_variant_http_error(error: &anyhow::Error) -> bool {
         })
 }
 
+fn permanent_variant_http_error_summary(error: &anyhow::Error) -> String {
+    let diagnostic = error.chain().find(|cause| {
+        let message = cause.to_string();
+        message.starts_with("Wayback ") && message.contains(" HTTP ")
+    });
+    diagnostic.map_or_else(
+        || "permanent HTTP error retrieving variant".into(),
+        |diagnostic| format!("permanent HTTP error retrieving variant: {diagnostic}"),
+    )
+}
+
 fn classify_wayback_request_error(error: reqwest::Error) -> anyhow::Error {
     let retryable = error.is_timeout()
         || error.is_connect()
@@ -883,7 +894,7 @@ where
                     report.warnings.push(WaybackImportWarning {
                         par: link.par.clone(),
                         language: Some(link.language.clone()),
-                        reason: format!("permanent HTTP error retrieving variant: {error:#}"),
+                        reason: permanent_variant_http_error_summary(&error),
                     });
                     continue;
                 }
@@ -1408,6 +1419,80 @@ mod tests {
         assert_eq!(report.roots_processed, 2);
         assert_eq!(report.warnings.len(), 1);
         assert_eq!(report.warnings[0].language.as_deref(), Some("en"));
+    }
+
+    #[test]
+    fn http_499_variant_capture_warns_once_and_continues_import() {
+        let variant_capture_attempts = Cell::new(0);
+        let mut transport = FakeWayback {
+            requests: crate::wayback_request::WaybackRequests::with_clock(ImportClock(
+                Rc::new(Cell::new(Duration::ZERO)),
+            )),
+            responses: VecDeque::from([
+                (
+                    200,
+                    available_capture("https://cvc.cervantes.es/lengua/refranero/listado.aspx?letra=A"),
+                    None,
+                ),
+                (
+                    200,
+                    r#"<a href="Ficha.aspx?Par=1&amp;Lng=0">First</a><a href="Ficha.aspx?Par=2&amp;Lng=0">Second</a>"#.into(),
+                    None,
+                ),
+                (
+                    200,
+                    available_capture("https://cvc.cervantes.es/lengua/refranero/Ficha.aspx?Par=1&Lng=0"),
+                    None,
+                ),
+                (
+                    200,
+                    r#"<div id="idiomas"><a href="Ficha.aspx?Par=1&amp;Lng=9"><acronym>EN</acronym></a></div>"#.into(),
+                    None,
+                ),
+                (
+                    200,
+                    available_capture("https://cvc.cervantes.es/lengua/refranero/Ficha.aspx?Par=1&Lng=9"),
+                    None,
+                ),
+                (499, "private response body".into(), None),
+                (
+                    200,
+                    available_capture("https://cvc.cervantes.es/lengua/refranero/Ficha.aspx?Par=2&Lng=0"),
+                    None,
+                ),
+                (
+                    200,
+                    r#"<div id="idiomas"></div>"#.into(),
+                    None,
+                ),
+            ]),
+            on_send: |url: &str| {
+                let parsed = Url::parse(url).unwrap();
+                if parsed.path().starts_with("/web/")
+                    && parsed.query_pairs().any(|(key, value)| {
+                        key == "Par" && value == "1"
+                    })
+                    && parsed.query_pairs().any(|(key, value)| {
+                        key == "Lng" && value == "9"
+                    })
+                {
+                    variant_capture_attempts.set(variant_capture_attempts.get() + 1);
+                }
+            },
+        };
+
+        let report = import_wayback_with_transport(&mut transport, 'A', 2024, 2, |_| Ok(()))
+            .expect("a permanent variant error must not abort the import");
+
+        assert!(transport.responses.is_empty());
+        assert_eq!(variant_capture_attempts.get(), 1);
+        assert_eq!(report.roots_processed, 2);
+        assert_eq!(report.warnings.len(), 1);
+        assert_eq!(report.warnings[0].language.as_deref(), Some("en"));
+        assert!(report.warnings[0].reason.contains("HTTP 499"));
+        assert!(report.warnings[0].reason.contains("archived capture"));
+        assert!(!report.warnings[0].reason.contains("private response body"));
+        assert!(!report.warnings[0].reason.contains("Par=1"));
     }
 
     #[test]

@@ -258,6 +258,22 @@ impl Store {
         })
     }
 
+    /// Create shared Wayback request coordination for file-backed catalogs.
+    /// In-memory catalogs retain the request controller's local pacing behavior.
+    pub fn wayback_request_coordination(
+        &self,
+    ) -> Result<Option<Box<dyn crate::wayback_request::SharedRequestCoordination>>> {
+        let Some(path) = self.path.as_ref() else {
+            return Ok(None);
+        };
+        let connection = Connection::open(path)
+            .with_context(|| format!("opening Wayback coordination catalog {}", path.display()))?;
+        connection.execute_batch("PRAGMA busy_timeout = 5000;")?;
+        Ok(Some(Box::new(SqliteWaybackRequestCoordination {
+            connection,
+        })))
+    }
+
     /// Acquire the background refresh lease if no active worker owns it.
     ///
     /// The caller only needs shared access: the session may hold the lease while the reader
@@ -862,6 +878,71 @@ impl Store {
 struct SqliteRetryDeadlinePersistence {
     path: PathBuf,
     owner: String,
+}
+
+struct SqliteWaybackRequestCoordination {
+    connection: Connection,
+}
+
+impl crate::wayback_request::SharedRequestCoordination for SqliteWaybackRequestCoordination {
+    fn gate(&mut self, now_millis: i64) -> Result<crate::wayback_request::RequestGate> {
+        let transaction = self
+            .connection
+            .transaction_with_behavior(TransactionBehavior::Immediate)?;
+        let next_request: Option<i64> = transaction
+            .query_row(
+                "SELECT CAST(value AS INTEGER) FROM metadata WHERE key = 'wayback_next_request_millis'",
+                [],
+                |row| row.get(0),
+            )
+            .optional()?;
+        let cooldown: Option<i64> = transaction
+            .query_row(
+                "SELECT CAST(value AS INTEGER) FROM metadata WHERE key = 'wayback_cooldown_until_millis'",
+                [],
+                |row| row.get(0),
+            )
+            .optional()?;
+        let available_at = next_request
+            .unwrap_or_default()
+            .max(cooldown.unwrap_or_default());
+        if available_at > now_millis {
+            transaction.commit()?;
+            return Ok(crate::wayback_request::RequestGate::WaitUntil(available_at));
+        }
+
+        let next_at = now_millis.saturating_add(
+            i64::try_from(crate::wayback_request::SHARED_MIN_PAUSE.as_millis()).unwrap_or(i64::MAX),
+        );
+        transaction.execute(
+            "INSERT INTO metadata(key, value) VALUES ('wayback_next_request_millis', ?1)
+             ON CONFLICT(key) DO UPDATE SET value = excluded.value",
+            [next_at.to_string()],
+        )?;
+        transaction.commit()?;
+        Ok(crate::wayback_request::RequestGate::Granted)
+    }
+
+    fn record_cooldown(&mut self, deadline_millis: i64, _now_millis: i64) -> Result<()> {
+        let transaction = self
+            .connection
+            .transaction_with_behavior(TransactionBehavior::Immediate)?;
+        let previous: Option<i64> = transaction
+            .query_row(
+                "SELECT CAST(value AS INTEGER) FROM metadata WHERE key = 'wayback_cooldown_until_millis'",
+                [],
+                |row| row.get(0),
+            )
+            .optional()?;
+        let deadline = previous.unwrap_or_default().max(deadline_millis);
+        transaction.execute(
+            "INSERT INTO metadata(key, value) VALUES ('wayback_cooldown_until_millis', ?1)
+             ON CONFLICT(key) DO UPDATE SET value = excluded.value",
+            [deadline.to_string()],
+        )?;
+        transaction.commit()?;
+        Ok(())
+    }
 }
 
 impl SqliteRetryDeadlinePersistence {
