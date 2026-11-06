@@ -15,11 +15,10 @@
 
 ![Refranero CLI banner with its offline-first description, supported technologies, terminal prompt, and illustrated books](assets/refranero.png)
 
-Refranero is an offline-first command-line reader for Spanish proverbs
-(*refranes*) and related sayings. It reads from a local SQLite catalog. You
+Refranero is an offline-first command-line reader for Spanish proverbs (*refranes*) and related
+sayings. It reads from a local SQLite catalog. You
 can import more entries from the **Biblioteca Virtual Miguel de Cervantes**
-and the historical **Centro Virtual Cervantes** index through the
-**Wayback Machine**.
+and the historical **Centro Virtual Cervantes** index through the **Wayback Machine**.
 
 ## Quick start: get a random refrán
 
@@ -153,16 +152,16 @@ already owns the lease, the reader does not start a duplicate and says
 `An update is already running`.
 `--offline` disables the manual update with an explicit notice.
 
-| Key | Action |
-| --- | --- |
-| `n`, `Enter`, `Space` | Next random refrán |
-| `l`, `→` | Next language or multilingual variant |
-| `h`, `←` | Previous language or variant |
-| `c` | Next category |
-| `o` | Open the source in the browser |
-| `u` | Update the catalog in the background |
-| `?` | Show or hide the key map |
-| `q`, `Esc`, `Ctrl-C` | Quit |
+| Key                   | Action                                |
+|-----------------------|---------------------------------------|
+| `n`, `Enter`, `Space` | Next random refrán                    |
+| `l`, `→`              | Next language or multilingual variant |
+| `h`, `←`              | Previous language or variant          |
+| `c`                   | Next category                         |
+| `o`                   | Open the source in the browser        |
+| `u`                   | Update the catalog in the background  |
+| `?`                   | Show or hide the key map              |
+| `q`, `Esc`, `Ctrl-C`  | Quit                                  |
 
 The reader lists the available language codes under the title and boxes the
 current one. The caption reads `Other languages` when the codes are translations
@@ -230,12 +229,12 @@ The default output adapts to the terminal width and respects the reader's theme.
 Styles use named ANSI colors only, so the palette configured in the terminal
 stays in control.
 
-| Available width | Layout |
-| --- | --- |
-| 70 columns or more | Editorial: category eyebrow, rule, quote gutter |
-| 40–69 columns | Compact: same hierarchy without the rule |
-| Fewer than 40 columns | Plain lines with wrapped text |
-| Redirected output | Plain text with no escape sequences |
+| Available width       | Layout                                          |
+|-----------------------|-------------------------------------------------|
+| 70 columns or more    | Editorial: category eyebrow, rule, quote gutter |
+| 40–69 columns         | Compact: same hierarchy without the rule        |
+| Fewer than 40 columns | Plain lines with wrapped text                   |
+| Redirected output     | Plain text with no escape sequences             |
 
 `--count` above one prints a numbered collection instead of repeated cards.
 Every entry keeps the same composition, whether you read it with the default
@@ -565,46 +564,49 @@ Z; only after bootstrap completes does a later update process one letter per run
 
 ```mermaid
 flowchart TB
-    subgraph terminal[Terminal layer]
-        main[CLI entry<br/>main.rs]
-        session[Interactive session<br/>session.rs and presentation/]
-    end
+subgraph terminal[Terminal layer]
+main[CLI entry<br/>main.rs]
+session[Interactive session<br/>session.rs and presentation/]
+end
 
-    subgraph core[Core engine]
-        catalog[(Local SQLite catalog<br/>store.rs; seed.json compiled in)]
-        update[Update orchestration<br/>update.rs; resumed bootstrap through Z, then one letter per later update]
-        policy[Refresh policy<br/>refresh.rs<br/>Daily Cervantes Virtual; weekly Wayback<br/>5-minute lease; incremental Wayback cap: 10 entries]
-        ingest[Ingest adapters<br/>ingest.rs; parse HTML into records]
-    end
+subgraph core[Core engine]
+catalog[(Local SQLite catalog<br/>store.rs; seed.json compiled in)]
+update[Update orchestration<br/>update.rs; resumed bootstrap through Z, then one letter per later update]
+policy[Refresh policy<br/>refresh.rs<br/>Daily Cervantes Virtual; weekly Wayback<br/>5-minute lease; incremental Wayback cap: 10 entries]
+ingest[Ingest adapters<br/>ingest.rs; parse HTML into records]
+end
 
-    callbacks[Worker callbacks<br/>main.rs]
+callbacks[Worker callbacks<br/>main.rs]
 
-    subgraph external[External sources]
-        virtual[Cervantes Virtual<br/>current thematic pages]
-        wayback[Wayback Machine<br/>archived CVC alphabetical index]
-    end
+subgraph external[External sources]
+virtual[Cervantes Virtual<br/>current thematic pages]
+wayback[Wayback Machine<br/>archived CVC alphabetical index]
+end
 
-    main -->|non-interactive random: read locally| catalog
-    main -->|interactive command| session
-    session -->|read locally| catalog
-    main -.->|schedule background worker without session| update
-    session -.->|schedule background worker| update
-    main -->|explicit sync| ingest
-    main -->|explicit sync: persist imports| catalog
-    update -->|consult cadence and limits| policy
-    update -->|orchestrate selected imports| callbacks
-    callbacks -->|invoke selected imports| ingest
-    ingest -->|fetch current pages| virtual
-    ingest -->|fetch archived index and fichas| wayback
-    ingest -.->|import results| callbacks
-    callbacks -.->|persist records and progress| catalog
+main -->|non -interactive random: read locally|catalog
+main -->|interactive command|session
+session -->|read locally|catalog
+main -.->|schedule background worker without session|update
+session -.->|schedule background worker|update
+main -->|explicit sync|ingest
+main -->|explicit sync: persist imports|catalog
+update -->|consult cadence and limits|policy
+update -->|orchestrate selected imports|callbacks
+callbacks -->|invoke selected imports|ingest
+ingest -->|fetch current pages|virtual
+ingest -->|fetch archived index and fichas|wayback
+ingest -.->|import results|callbacks
+callbacks -.->| persist records and progress|catalog
 ```
 
 Mermaid source files:
 
-- [Internal architecture Mermaid source](docs/diagrams/architecture-internal.mmd) — modules, catalog, refresh policy, adapters, and external sources.
-- [Reading-flow Mermaid source](docs/diagrams/sequence-reading-flow.mmd) — local-first response and conditional background refresh.
-- [Distribution-pipeline Mermaid source](docs/diagrams/distribution-pipeline.mmd) — tagged releases, assets, registry publishing, and install paths.
+- [Internal architecture Mermaid source](docs/diagrams/architecture-internal.mmd) — modules,
+  catalog, refresh policy, adapters, and external sources.
+- [Reading-flow Mermaid source](docs/diagrams/sequence-reading-flow.mmd) — local-first response and
+  conditional background refresh.
+- [Distribution-pipeline Mermaid source](docs/diagrams/distribution-pipeline.mmd) — tagged releases,
+  assets, registry publishing, and install paths.
 
 Standalone HTML diagrams:
 
