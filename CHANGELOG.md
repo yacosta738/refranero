@@ -1,5 +1,29 @@
 # Changelog
 
+## [0.7.0](https://github.com/yacosta738/refranero/compare/v0.6.1...v0.7.0) (2026-11-06)
+
+
+### Features
+
+* **tui:** manual catalog update with progress bar + statistics screen ([#45](https://github.com/yacosta738/refranero/issues/45)) ([5940c08](https://github.com/yacosta738/refranero/commit/5940c082145a779ee3a9d8942ad921823686252a))
+
+
+### Bug Fixes
+
+* **wayback:** address PR [#47](https://github.com/yacosta738/refranero/issues/47) review findings ([#50](https://github.com/yacosta738/refranero/issues/50)) ([921a672](https://github.com/yacosta738/refranero/commit/921a672af39fe497b5a1ad3aa6ea3c057194fe07))
+* **wayback:** complete source bootstrap reliably ([#47](https://github.com/yacosta738/refranero/issues/47)) ([7623ea2](https://github.com/yacosta738/refranero/commit/7623ea23503347872ed7627a5522bba33b770f05))
+
+
+### Documentation
+
+* **diagrams:** add Mermaid sources and update flows ([#49](https://github.com/yacosta738/refranero/issues/49)) ([d9bb483](https://github.com/yacosta738/refranero/commit/d9bb4837f13a6bc16069bc6db9a3d5009b966ed0))
+
+
+### Chores
+
+* **deps:** update docker/login-action action to v4.8.0 ([#44](https://github.com/yacosta738/refranero/issues/44)) ([ccf9e79](https://github.com/yacosta738/refranero/commit/ccf9e794526884fa7b62cc227778f81482a0992a))
+* **deps:** update pnpm to v12.18.0 ([#48](https://github.com/yacosta738/refranero/issues/48)) ([c67050d](https://github.com/yacosta738/refranero/commit/c67050d639735b7e91e06b503e07c681aac108a3))
+
 ## [0.6.1](https://github.com/yacosta738/refranero/compare/v0.6.0...v0.6.1) (2026-11-04)
 
 
