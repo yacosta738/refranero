@@ -1,0 +1,27 @@
+sequenceDiagram
+    actor User
+    participant CLI as CLI / Session
+    participant Catalog as Local SQLite Catalog
+    participant Worker as Background Refresh Worker
+    participant Sources as Cervantes Virtual / Wayback
+
+    alt Interactive startup
+        CLI->>Catalog: Check policy and attempt 5-minute lease
+        CLI-)Worker: Spawn only if online, due/eligible, and acquired
+        CLI->>Catalog: Read first local entry
+        Catalog-->>CLI: Return entry
+        CLI-->>User: Display entry
+    else One-shot random
+        CLI->>Catalog: Read local entry
+        Catalog-->>CLI: Return entry
+        CLI-->>User: Print entry
+        CLI->>Catalog: After printing, check due work and attempt lease
+        CLI-)Worker: Spawn only if due, online, and acquired
+    end
+    Worker->>Sources: Fetch selected source pages
+    Sources-->>Worker: Return page data
+    Note over Worker,Catalog: Worker callbacks in main.rs persist imported records and progress to the catalog; the reader does not wait.
+    Note over Worker,Sources: A resumed bootstrap processes all remaining letters through Z. Only after completion does a later update process one letter per run.
+    Note over CLI,Sources: --offline, no-due, or held-lease cases start no worker. One-shot may refresh due Cervantes Virtual work, but cannot start full Wayback bootstrap.
+    Note over Catalog,Worker: Five-minute lease usually prevents overlap; a worker delayed past expiry may overlap a replacement worker.
+    Note over User,CLI: Reader keys: u requests a forced online update if a lease is available; s opens or closes catalog statistics.

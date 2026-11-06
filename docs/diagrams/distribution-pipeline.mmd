@@ -1,0 +1,10 @@
+flowchart LR
+    repo[Source repository] --> workflow[GitHub Actions release workflow<br/>Tag releases publish registries;<br/>manual recovery skips registry publishing]
+    workflow --> build[Build native assets<br/>Linux and macOS x64 / arm64<br/>Four build targets]
+    build --> assets[Verify and attach four archives<br/>and checksums to GitHub Release]
+
+    assets -->|new release only| crates[crates.io<br/>refranero-cli; install with cargo]
+    assets -->|new release only| npm[npm registry<br/>Six platform packages and thin wrapper;<br/>four reuse binaries, two Windows targets build in npm jobs]
+    assets -->|new release only| docker[Docker Hub and GHCR<br/>linux/amd64 and linux/arm64]
+
+    npm -.-> dispatch[Wrapper selects matching package;<br/>no install-time binary download]
