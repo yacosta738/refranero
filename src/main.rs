@@ -402,6 +402,9 @@ fn refresh_wayback(store: &mut Store, owner: &str) -> Result<()> {
     } else {
         requests
     };
+    if let Some(coordination) = store.wayback_request_coordination()? {
+        requests = requests.with_shared_coordination(coordination);
+    }
     update::run_wayback_updates(
         store,
         |store, letter, bootstrap, _position| {
@@ -574,6 +577,9 @@ fn sync(source: &SyncSource, store: &mut Store) -> Result<()> {
             validate_import_limit(limit)?;
             let client = ingest::wayback_client_with_timeout(std::time::Duration::from_secs(20))?;
             let mut requests = wayback_request::WaybackRequests::new();
+            if let Some(coordination) = store.wayback_request_coordination()? {
+                requests = requests.with_shared_coordination(coordination);
+            }
             let report = ingest::import_wayback_stream(
                 &client,
                 &mut requests,
