@@ -1,5 +1,22 @@
 # Changelog
 
+## [0.8.0](https://github.com/yacosta738/refranero/compare/v0.7.2...v0.8.0) (2026-11-13)
+
+
+### Features
+
+* enable Cargo min-publish-age dependency cooldowns ([#58](https://github.com/yacosta738/refranero/issues/58)) ([6180f69](https://github.com/yacosta738/refranero/commit/6180f697f9f7dd5b8a84839ea27943ea773f8d01))
+
+
+### Bug Fixes
+
+* **deps:** update rust dependencies (non-major) ([#55](https://github.com/yacosta738/refranero/issues/55)) ([9ac25bf](https://github.com/yacosta738/refranero/commit/9ac25bfa9fad77d3024933cbeb3f3bf5e65f3452))
+
+
+### Chores
+
+* **deps:** update dependency markdownlint-cli2 to v0.24.1 ([#56](https://github.com/yacosta738/refranero/issues/56)) ([f600f6f](https://github.com/yacosta738/refranero/commit/f600f6f3228e63febbe298f914dae142baf70ef9))
+
 ## [0.7.2](https://github.com/yacosta738/refranero/compare/v0.7.1...v0.7.2) (2026-11-06)
 
 
