@@ -1,5 +1,24 @@
 # Changelog
 
+## [0.8.0](https://github.com/yacosta738/refranero/compare/v0.7.2...v0.8.0) (2026-11-24)
+
+
+### Features
+
+* enable Cargo min-publish-age dependency cooldowns ([#58](https://github.com/yacosta738/refranero/issues/58)) ([6180f69](https://github.com/yacosta738/refranero/commit/6180f697f9f7dd5b8a84839ea27943ea773f8d01))
+
+
+### Bug Fixes
+
+* **deps:** update rust dependencies (non-major) ([#55](https://github.com/yacosta738/refranero/issues/55)) ([9ac25bf](https://github.com/yacosta738/refranero/commit/9ac25bfa9fad77d3024933cbeb3f3bf5e65f3452))
+
+
+### Chores
+
+* **deps:** update actions/create-github-app-token action to v3.4.0 ([#61](https://github.com/yacosta738/refranero/issues/61)) ([eb32d89](https://github.com/yacosta738/refranero/commit/eb32d89e7e12c293c01c0fca16dff4b60ffe46f5))
+* **deps:** update dependency markdownlint-cli2 to v0.24.1 ([#56](https://github.com/yacosta738/refranero/issues/56)) ([f600f6f](https://github.com/yacosta738/refranero/commit/f600f6f3228e63febbe298f914dae142baf70ef9))
+* **deps:** update npm dependencies (non-major) ([#60](https://github.com/yacosta738/refranero/issues/60)) ([614bf77](https://github.com/yacosta738/refranero/commit/614bf772e88166255aa307185a8544c63e2ad9b1))
+
 ## [0.7.2](https://github.com/yacosta738/refranero/compare/v0.7.1...v0.7.2) (2026-11-06)
 
 
